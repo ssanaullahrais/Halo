@@ -1,0 +1,25 @@
+node_modules
+dist
+src-tauri/target
+src-tauri/gen
+
+# Local research, recordings, build outputs and diagnostics
+/output/
+/test-files/
+/.playwright-cli/
+/dev*.html
+*.log
+/packaging/out/
+/shellext/build/
+/shellext/target/
+*.pdb
+*.msix
+*.cer
+*.pfx
+*.key
+*.key.pub
+.env
+.env.*
+!.env.example
+Thumbs.db
+Desktop.ini

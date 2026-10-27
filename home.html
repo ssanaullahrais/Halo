@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Halo</title>
+    <link rel="stylesheet" href="/src/home.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <!-- ------------------------------------------------ sidebar -->
+      <aside class="side">
+        <div class="brand">
+          <svg class="logo" viewBox="0 0 80 80" aria-hidden="true">
+            <defs>
+              <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6d57ff"/><stop offset="1" stop-color="#1f6bff"/></linearGradient>
+              <radialGradient id="shine" cx=".3" cy=".2" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".35"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+            </defs>
+            <circle cx="40" cy="40" r="38" fill="url(#lg)"/>
+            <circle cx="40" cy="40" r="38" fill="url(#shine)"/>
+            <circle cx="40" cy="40" r="25" fill="none" stroke="#fff" stroke-width="6" stroke-linecap="round" stroke-dasharray="20 7.2" transform="rotate(-80 40 40)"/>
+            <circle cx="40" cy="40" r="8" fill="#fff"/>
+          </svg>
+          <div><b>Halo</b><span>Quick actions for any file</span></div>
+        </div>
+
+        <nav id="nav">
+          <button type="button" data-page="general" class="on">
+            <span class="settings-icon" data-settings-icon="Sun"></span>
+            <div><strong>General</strong><span>Basic settings and behavior</span></div>
+          </button>
+          <button type="button" data-page="uploads">
+            <span class="settings-icon" data-settings-icon="CloudUpload"></span>
+            <div><strong>Uploads &amp; Sharing</strong><span>Free services for links</span></div>
+          </button>
+          <button type="button" data-page="system">
+            <span class="settings-icon" data-settings-icon="Monitor"></span>
+            <div><strong>System</strong><span>What Halo needs to run</span></div>
+          </button>
+          <button type="button" data-page="about">
+            <span class="settings-icon" data-settings-icon="Info"></span>
+            <div><strong>About</strong><span>Version and app info</span></div>
+          </button>
+        </nav>
+
+        <div class="ver">Halo <span id="ver"></span></div>
+      </aside>
+
+      <!-- ------------------------------------------------ content -->
+      <main class="content">
+        <div class="pages" id="pages">
+        <header class="top">
+          <div>
+            <h1 id="title">General Settings</h1>
+            <p id="subtitle">Customize how Halo works.</p>
+          </div>
+          <span class="status" id="status" title="Running in the tray"><i></i><b>Running in the tray</b></span>
+        </header>
+
+          <!-- ============ General ============ -->
+          <section class="page" data-page="general" data-title="General Settings" data-sub="Customize how Halo works.">
+            <div class="card">
+              <h2>How it works</h2>
+              <ol class="steps">
+                <li>
+                  <div class="marker"><b>1</b><span class="tile"><span class="settings-icon" data-settings-icon="MousePointer2"></span></span></div>
+                  <strong>Hold a file</strong><span id="step1">Press and hold any file.</span>
+                </li>
+                <li>
+                  <div class="marker"><b>2</b><span class="tile"><span class="settings-icon" data-settings-icon="Orbit"></span></span></div>
+                  <strong>Pick an action</strong><span id="step2">Choose compress, convert, resize and more.</span>
+                </li>
+                <li>
+                  <div class="marker"><b>3</b><span class="tile"><span class="settings-icon" data-settings-icon="File"></span></span></div>
+                  <strong>That's it</strong><span id="step3">A new file is saved beside the original.</span>
+                </li>
+              </ol>
+            </div>
+
+            <div class="card inline">
+              <div class="label"><h2>Activation Style</h2><span>Choose how Halo appears.</span></div>
+              <div class="choice" id="style">
+                <button type="button" data-style="wheel"><span class="settings-icon" data-settings-icon="CircleDot"></span>Radial Wheel</button>
+                <button type="button" data-style="menu"><span class="settings-icon" data-settings-icon="Menu"></span>Menu List</button>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="line">
+                <div class="label"><h2>Hold Time</h2><span>How long to hold before Halo opens.</span></div>
+                <output id="holdOut">0.25 s</output>
+              </div>
+              <input id="hold" type="range" min="200" max="1000" step="50" value="250" />
+              <div class="ticks"><span>0.2 s</span><span>0.4 s</span><span>0.6 s</span><span>0.8 s</span><span>1.0 s</span></div>
+            </div>
+
+            <div class="card">
+              <div class="line">
+                <div class="label"><h2>Opacity</h2><span>How see-through the wheel and menu are.</span></div>
+                <output id="opacityOut">100%</output>
+              </div>
+              <input id="opacity" type="range" min="40" max="100" step="5" value="100" />
+              <div class="ticks"><span>40%</span><span>55%</span><span>70%</span><span>85%</span><span>100%</span></div>
+            </div>
+
+            <div class="card">
+              <h2>System Behavior</h2>
+              <div class="rows">
+                <div class="row">
+                  <span class="tile"><span class="settings-icon" data-settings-icon="Grid2X2"></span></span>
+                  <div class="label"><strong>Start with Windows</strong><span>Halo starts quietly when you sign in.</span></div>
+                  <label class="switch"><input id="startup" type="checkbox" /><i></i></label>
+                </div>
+                <div class="row">
+                  <span class="tile"><span class="settings-icon" data-settings-icon="Shield"></span></span>
+                  <div class="label"><strong>Keep running in the tray</strong><span>Closing this window keeps Halo running in the tray.</span></div>
+                  <label class="switch"><input id="tray" type="checkbox" /><i></i></label>
+                </div>
+                <div class="row">
+                  <span class="tile"><span class="settings-icon" data-settings-icon="PanelTop"></span></span>
+                  <div class="label"><strong>Right-click menu</strong><span id="ctxHint">Adds Halo under "Show more options" in Explorer.</span></div>
+                  <label class="switch"><input id="ctx" type="checkbox" /><i></i></label>
+                </div>
+                <div class="row">
+                  <span class="tile"><span class="settings-icon" data-settings-icon="MousePointer2"></span></span>
+                  <div class="label"><strong>Open with Ctrl + click</strong><span>Ctrl + click a file to open Halo. Turn off to multi-select with Ctrl.</span></div>
+                  <label class="switch"><input id="ctrlclick" type="checkbox" /><i></i></label>
+                </div>
+                <div class="row">
+                  <span class="tile"><span class="settings-icon" data-settings-icon="MousePointerClick"></span></span>
+                  <div class="label"><strong>Open options on hover</strong><span>Point at a wedge to open its options. Turn off to require a click.</span></div>
+                  <label class="switch"><input id="hoverOpen" type="checkbox" /><i></i></label>
+                </div>
+                <div class="row">
+                  <span class="tile"><span class="settings-icon" data-settings-icon="Bell"></span></span>
+                  <div class="label"><strong>Show notifications</strong><span>Show a message when a task is finished.</span></div>
+                  <label class="switch"><input id="notify" type="checkbox" /><i></i></label>
+                </div>
+              </div>
+            </div>
+
+            <div class="card inline">
+              <div class="label">
+                <h2>Keyboard Shortcut</h2>
+                <span>Select a file, press the shortcut, and Halo opens.</span>
+                <div class="keys" id="keys"></div>
+                <div class="keys alt" id="ctrlKeys"><kbd>Ctrl</kbd><em>+</em><kbd>Click</kbd><span class="or">Or hold Ctrl and click a file</span></div>
+              </div>
+              <button type="button" class="btn ghost" id="changeKeys"><span class="settings-icon" data-settings-icon="Pencil"></span>Change shortcut</button>
+            </div>
+
+            <div class="card">
+              <h2>Default File Behavior</h2>
+              <span class="sub">Choose how Halo saves the files it makes.</span>
+              <div class="radios" id="saveMode">
+                <label><input type="radio" name="save" value="beside" /><i></i><div><strong>Save next to the original</strong><span>For example photo-small.jpg beside photo.jpg</span></div></label>
+                <label><input type="radio" name="save" value="ask" /><i></i><div><strong>Let me choose the location each time</strong><span>Halo asks for a folder after each action</span></div></label>
+              </div>
+              <div class="row solo">
+                <div class="label"><strong>Never overwrite originals</strong><span>Halo always saves a new file with a changed name.</span></div>
+                <label class="switch locked"><input type="checkbox" checked disabled /><i></i></label>
+              </div>
+            </div>
+          </section>
+
+          <!-- ============ Uploads ============ -->
+          <section class="page" data-page="uploads" hidden data-title="Uploads &amp; Sharing" data-sub="Get a link to a copy of your file.">
+            <div class="card">
+              <h2>Upload services</h2>
+              <div class="rows" id="providers"></div>
+              <p class="warn">A copy of the file is uploaded to these free public services. Don't upload anything private.</p>
+            </div>
+          </section>
+          <!-- ============ System ============ -->
+          <section class="page" data-page="system" hidden data-title="System" data-sub="Programs Halo needs. Install in one click.">
+            <div class="card">
+              <h2>System check</h2>
+              <div class="rows" id="checks"></div>
+              <div class="system-check-footer"><span class="system-info" data-settings-icon="Info" aria-hidden="true"></span><div><strong id="systemSummary">Checking your system…</strong><span id="systemSummaryDetail">Checking the components Halo uses.</span></div><button type="button" class="btn primary" id="recheck"><span class="settings-icon" data-settings-icon="RefreshCw"></span>Check again</button></div>
+            </div>
+          </section>
+
+          <!-- ============ About ============ -->
+          <section class="page" data-page="about" hidden data-title="About" data-sub="Version and app information.">
+            <div class="card">
+              <h2>Halo <span id="ver2" class="muted"></span></h2>
+              <p class="lead">Hold any file to compress, convert, resize or share it, without opening another app.</p>
+              <div class="update-panel"><div class="label"><strong>App updates</strong><span id="updateMessage" role="status">Check for a newer version of Halo.</span></div><div class="update-actions"><button type="button" class="btn ghost small" id="checkUpdates">Check for updates</button><button type="button" class="btn primary small" id="installUpdate" hidden>Update &amp; restart</button></div></div>
+              <div class="row solo">
+                <div class="label"><strong>Settings file</strong><span id="settingsPath">…</span></div>
+                <button type="button" class="btn ghost small" id="showSettings">Show in folder</button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <footer class="bar">
+          <button type="button" class="btn ghost" id="restore"><span class="settings-icon" data-settings-icon="RotateCcw"></span>Restore defaults</button>
+          <p id="msg" role="status"></p>
+          <button type="button" class="btn primary" id="save" disabled><span class="settings-icon" data-settings-icon="Check"></span><span>Save settings</span></button>
+        </footer>
+      </main>
+    </div>
+    <script type="module" src="/src/home.js"></script>
+  </body>
+</html>

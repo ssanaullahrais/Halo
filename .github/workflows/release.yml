@@ -1,0 +1,63 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: stable
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: node scripts/check-version.mjs
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Require update signing key
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if (!$env:TAURI_SIGNING_PRIVATE_KEY) { throw 'Configure TAURI_SIGNING_PRIVATE_KEY before releasing.' }
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: v__VERSION__
+          releaseName: Halo v__VERSION__
+          releaseBody: |
+            Quick file actions and screen recording for Windows.
+
+            Download the x64 setup EXE for a normal installation, or MSI for managed deployment.
+            Signed updater artifacts and latest.json are used by installed copies of Halo.
+            See CHANGELOG.md for changes and README.md for optional engine setup.
+          releaseDraft: true
+          prerelease: false
+          args: --locked
+      - name: Upload checksums
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $release = gh api "repos/${{ github.repository }}/releases/tags/v$version" | ConvertFrom-Json
+          $lines = foreach ($asset in $release.assets) {
+            if ($asset.digest) { "$($asset.digest -replace '^sha256:','')  $($asset.name)" }
+          }
+          $lines | Set-Content -Encoding utf8 SHA256SUMS.txt
+          gh release upload "v$version" SHA256SUMS.txt --clobber --repo "${{ github.repository }}"

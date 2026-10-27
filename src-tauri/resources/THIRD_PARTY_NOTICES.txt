@@ -1,0 +1,19 @@
+Halo optional conversion engine
+
+Halo's conversion preset implementation is original code. FileConverter source
+code has not been imported. Its behaviour and public feature set were reviewed
+at https://github.com/Tichau/FileConverter (GPL-3.0).
+
+Optional ImageMagick 7.1.2-34 portable Q16 x64:
+https://github.com/ImageMagick/ImageMagick/releases/tag/7.1.2-34
+https://imagemagick.org/license/
+The optional downloader verifies the release archive's published SHA-256.
+ImageMagick's complete LICENSE.txt and NOTICE.txt are preserved in its tools
+directory, including third-party dependency notices. Halo invokes the engine as
+a separate process to decode PSD/PSB, TGA, DDS and EXR composites. Output formats
+are written by Halo's existing image libraries; PDF reading uses PDFium.
+
+The isolated psd-tools, OpenCV and LaMA evaluations under output/integration-
+research are research artifacts and are not bundled as application features.
+The separate watermark-removal UI and its runtime installer were removed at
+the user's request. No LaMA model weights are redistributed with Halo.

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Halo",
+  "version": "0.1.0",
+  "identifier": "com.halo.wheel",
+  "build": {
+    "additionalWatchFolders": [
+      "../shared"
+    ],
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Halo",
+        "width": 880,
+        "height": 600,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "visible": true,
+        "resizable": false,
+        "shadow": false,
+        "focus": false,
+        "focusable": false,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis",
+      "msi"
+    ],
+    "resources": [
+      "resources/**/*"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "createUpdaterArtifacts": true,
+    "publisher": "Sanaullah Rais",
+    "shortDescription": "Quick file actions and screen recording for Windows"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE0Q0IzNTZEOTI3RDJFMTAKUldRUUxuMlNiVFhMcElBK1JUeUZEU25GUmNKQ2pOcDltUE9DTUxMRC85amZQa1JUdzFlT1lKNW4K",
+      "endpoints": [
+        "https://github.com/ssanaullahrais/Halo/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

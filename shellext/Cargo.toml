@@ -1,0 +1,30 @@
+[package]
+name = "halo_menu"
+version = "0.1.0"
+edition = "2021"
+description = "Windows 11 native right-click menu (IExplorerCommand) for Halo."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Storage",
+    "Storage_Search",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+] }
+windows-core = "0.61"
+serde_json = "1"
+
+# Standalone crate: not part of any workspace, so it never rebuilds the Tauri app.
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+

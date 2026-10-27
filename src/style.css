@@ -1,0 +1,1209 @@
+:root {
+  --disc-a: #7fa9f8;
+  --disc-b: #3a63d8;
+  --disc-stroke: rgba(255, 255, 255, 0.5);
+  --wedge: rgba(255, 255, 255, 0.13);
+  --wedge-hover: rgba(255, 255, 255, 0.27);
+  --wedge-stroke: rgba(255, 255, 255, 0.3);
+  --hub: radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.34), rgba(150, 195, 255, 0.16) 70%);
+  --card: linear-gradient(135deg, #4f88f2, #2d5cd4);
+  --card-hover: linear-gradient(135deg, #6c9ffb, #3f70e6);
+  --card-stroke: rgba(255, 255, 255, 0.42);
+  --panel: #1d409f;
+  --accent: #6a4dff;
+  --accent-2: #3b2bd9;
+  --ok: #19b34a;
+  --danger: #ff5d5d;
+  --text: #fff;
+  --text-dim: rgba(255, 255, 255, 0.78);
+  font-family: "Inter Variable", "Inter", "Segoe UI", system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --disc-a: #2a3452;
+    --disc-b: #0d1222;
+    --disc-stroke: rgba(255, 255, 255, 0.22);
+    --wedge: rgba(255, 255, 255, 0.07);
+    --wedge-hover: rgba(255, 255, 255, 0.17);
+    --wedge-stroke: rgba(255, 255, 255, 0.16);
+    --hub: radial-gradient(circle at 30% 22%, rgba(255, 255, 255, 0.2), rgba(120, 140, 190, 0.08) 70%);
+    --card: linear-gradient(135deg, #2b3758, #171e36);
+    --card-hover: linear-gradient(135deg, #41508a, #24305c);
+    --card-stroke: rgba(255, 255, 255, 0.22);
+    --panel: #10152b;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  color: var(--text);
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+#app {
+  --cx: 340px;
+  --cy: 360px;
+  --dir: 1;
+  position: relative;
+  zoom: 0.6;
+  width: 1000px;
+  height: 720px;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+#app.shown {
+  opacity: var(--user-opacity, 1);
+}
+#app.flip {
+  --cx: 660px;
+  --dir: -1;
+}
+
+/* ---------------------------------------------------------------- wheel */
+.stage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+#app:not([data-mode="wheel"]) .stage {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.wheel {
+  position: absolute;
+  left: calc(var(--cx) - 280px);
+  top: calc(var(--cy) - 280px);
+  width: 560px;
+  height: 560px;
+  transform: scale(0.82);
+  opacity: 0;
+  transition: transform 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2), opacity 0.16s ease;
+}
+.shown .wheel {
+  transform: scale(1);
+  opacity: 1;
+}
+.wheel svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.disc {
+  fill: url(#gradDisc);
+  stroke: var(--disc-stroke);
+  stroke-width: 1.5;
+  pointer-events: all;
+}
+.wedge {
+  pointer-events: all;
+  cursor: pointer;
+}
+.wedge path {
+  fill: var(--wedge);
+  stroke: var(--wedge-stroke);
+  stroke-width: 1.2;
+  transition: fill 0.12s ease;
+}
+.wedge:hover path {
+  fill: var(--wedge-hover);
+}
+.wedge.active path {
+  fill: url(#gradActive);
+  stroke: rgba(205, 190, 255, 0.95);
+  stroke-width: 1.8;
+  filter: drop-shadow(0 0 9px rgba(122, 100, 255, 0.85));
+}
+.wedge .glyph {
+  stroke: #fff;
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+.wedge .glyph circle[r="1.6"] {
+  fill: #fff;
+  stroke: none;
+}
+.wedge text {
+  fill: #fff;
+  font-size: 21px;
+  font-weight: 500;
+  text-anchor: middle;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(0, 10, 50, 0.35);
+  stroke-width: 2.5px;
+}
+
+.hub {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 238px;
+  height: 238px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--hub);
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 0 26px rgba(255, 255, 255, 0.12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 18px;
+  pointer-events: none;
+  overflow: hidden;
+}
+.thumb {
+  width: 104px;
+  height: 78px;
+  border-radius: 7px;
+  border: 2px solid rgba(255, 255, 255, 0.92);
+  box-shadow: 0 6px 16px rgba(0, 10, 50, 0.45);
+  background: rgba(255, 255, 255, 0.14) center / cover no-repeat;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.thumb.glyph-only {
+  border: none;
+  box-shadow: none;
+  background: none;
+}
+.thumb svg {
+  width: 64px;
+  height: 64px;
+}
+.hub-name {
+  max-width: 190px;
+  font-size: 19px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 6px rgba(0, 10, 50, 0.5);
+}
+.hub-meta {
+  max-width: 180px;
+  font-size: 15px;
+  line-height: 1.3;
+  color: var(--text-dim);
+  text-shadow: 0 1px 6px rgba(0, 10, 50, 0.5);
+}
+
+/* ---------------------------------------------------------------- option cards */
+.cards {
+  position: absolute;
+  left: 620px;
+  top: calc(var(--cy) - 280px);
+  height: 560px;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: none;
+}
+#app.flip .cards {
+  left: 60px;
+}
+
+/* a long list becomes one compact, vertically centred panel of flat, non-shrinking rows
+   that scroll inside it instead of overflowing the window. */
+.cards.flyout {
+  justify-content: center;
+}
+.flyout-box {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: 85%;
+  padding: 10px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, var(--disc-a), var(--disc-b));
+  border: 1.5px solid var(--disc-stroke);
+  box-shadow: 0 16px 30px rgba(0, 10, 50, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+  gap: 2px;
+  /* Keep both row insets equal; wheel/trackpad scrolling needs no reserved gutter. */
+  scrollbar-width: none;
+}
+/* a soft blob bridging the gap to the wheel, so the panel reads as one connected piece */
+.flyout-box::before {
+  content: "";
+  position: absolute;
+  left: -34px;
+  top: 50%;
+  width: 56px;
+  height: 84px;
+  transform: translateY(-50%);
+  background: linear-gradient(180deg, var(--disc-a), var(--disc-b));
+  border-radius: 50%;
+  z-index: -1;
+}
+.flyout-box::-webkit-scrollbar,
+#app.menu .cards::-webkit-scrollbar {
+  display: none;
+}
+.flyout-box .card {
+  flex: none;
+  animation: none;
+  opacity: 1;
+  transform: none;
+  min-height: 0;
+  margin: 0;
+  padding: 9px 10px;
+  gap: 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  filter: none;
+  border-radius: 12px;
+}
+.flyout-box .card:hover:not(.disabled):not(.current),
+.flyout-box .card.current {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+.card {
+  --dx: 0px;
+  position: relative;
+  min-height: 62px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-radius: 14px;
+  background: var(--card);
+  border: 1.3px solid var(--card-stroke);
+  box-shadow: 0 10px 22px rgba(0, 10, 60, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  pointer-events: all;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateX(calc((var(--dx) + 24px) * var(--dir)));
+  animation: card-in 0.12s ease-out forwards;
+  animation-delay: calc(var(--i) * 12ms);
+  transition: background 0.12s ease, border-color 0.12s ease, filter 0.12s ease;
+}
+@keyframes card-in {
+  to {
+    opacity: 1;
+    transform: translateX(calc(var(--dx) * var(--dir)));
+  }
+}
+.card:hover:not(.disabled):not(.current) {
+  background: var(--card-hover);
+  border-color: rgba(255, 255, 255, 0.85);
+  filter: drop-shadow(0 0 8px rgba(160, 200, 255, 0.55));
+}
+.card.disabled {
+  opacity: 0.55 !important;
+  cursor: default;
+}
+.card.current {
+  cursor: default;
+  border-color: rgba(255, 255, 255, 0.85);
+}
+.card.danger:hover {
+  border-color: var(--danger);
+  filter: drop-shadow(0 0 8px rgba(255, 93, 93, 0.6));
+}
+.card.confirming {
+  background: linear-gradient(135deg, rgba(220, 60, 60, 0.9), rgba(170, 30, 50, 0.85));
+}
+.card .ico {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.16);
+}
+.card .ico svg,
+.btn svg {
+  width: 20px;
+  height: 20px;
+  stroke: #fff;
+  fill: none;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.card .txt {
+  min-width: 0;
+  flex: 1;
+}
+.card .title {
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+.card .sub {
+  font-size: 16px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.card .tick svg {
+  width: 20px;
+  height: 20px;
+  stroke: #fff;
+  fill: none;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.card.editor {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  cursor: default;
+  background: var(--card-hover);
+  border-color: rgba(255, 255, 255, 0.85);
+}
+.editor .row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+}
+.editor .row label {
+  width: 52px;
+  color: var(--text-dim);
+}
+.editor .row output {
+  min-width: 56px;
+  text-align: right;
+  font-weight: 600;
+}
+.editor input[type="range"] {
+  min-width: 0;
+  width: 100%;
+  flex: 1;
+  accent-color: #fff;
+  height: 4px;
+}
+.editor input[type="text"] {
+  flex: 1;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.5);
+  background: rgba(0, 10, 50, 0.35);
+  color: #fff;
+  padding: 0 10px;
+  font: inherit;
+  user-select: text;
+  -webkit-user-select: text;
+  outline: none;
+}
+.editor .actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chip {
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  cursor: pointer;
+}
+.chip.on {
+  background: rgba(255, 255, 255, 0.3);
+}
+.apply {
+  height: 32px;
+  padding: 0 16px;
+  border-radius: 9px;
+  border: none;
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------- panels (busy, done, toast) */
+.panel {
+  position: absolute;
+  left: var(--cx);
+  top: var(--cy);
+  transform: translate(-50%, -50%) scale(0.92);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.16s ease, transform 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+#app[data-mode="busy"] .busy,
+#app[data-mode="done"] .done,
+#app[data-mode="toast"] .toast {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.busy {
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.ring {
+  position: relative;
+  width: 236px;
+  height: 236px;
+  border-radius: 50%;
+  background: var(--panel);
+  box-shadow: 0 18px 40px rgba(0, 10, 60, 0.5);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.ring svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+}
+.ring .track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.18);
+  stroke-width: 5;
+}
+.ring .bar {
+  fill: none;
+  stroke: #5aa2ff;
+  stroke-width: 5;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 8px rgba(90, 162, 255, 0.95));
+  transition: stroke-dashoffset 0.2s linear;
+}
+.ring .label {
+  font-size: 20px;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.25;
+}
+.busy .sizes {
+  font-size: 18px;
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text-dim);
+}
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 18px;
+  border-radius: 10px;
+  border: 1.3px solid var(--card-stroke);
+  background: var(--card);
+  color: #fff;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn:hover {
+  background: var(--card-hover);
+  border-color: rgba(255, 255, 255, 0.85);
+}
+.btn.primary {
+  background: linear-gradient(180deg, #2f7dff, #1c5ee6);
+  border-color: rgba(160, 200, 255, 0.9);
+}
+.btn.pill {
+  height: 36px;
+  border-radius: 999px;
+  min-width: 120px;
+}
+
+.done {
+  width: 360px;
+  padding: 44px 22px 20px;
+  border-radius: 20px;
+  background: var(--panel);
+  border: 1.3px solid var(--card-stroke);
+  box-shadow: 0 22px 46px rgba(0, 10, 60, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.done .badge {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translate(-50%, -50%);
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #4be07a, var(--ok));
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.85), 0 8px 18px rgba(0, 60, 20, 0.5);
+  display: grid;
+  place-items: center;
+}
+.done .badge svg {
+  width: 28px;
+  height: 28px;
+  stroke: #fff;
+  fill: none;
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.done .close {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+.done .close:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.done .close svg {
+  width: 14px;
+  height: 14px;
+  stroke: #fff;
+  fill: none;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+.done .head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.done .head .thumb {
+  width: 52px;
+  height: 52px;
+  flex: none;
+}
+.done .head .thumb svg {
+  width: 40px;
+  height: 40px;
+}
+.done h3 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 700;
+}
+.done .detail {
+  font-size: 16px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+.toast {
+  max-width: 340px;
+  padding: 14px 22px;
+  border-radius: 16px;
+  background: var(--panel);
+  border: 1.3px solid var(--card-stroke);
+  box-shadow: 0 18px 40px rgba(0, 10, 60, 0.5);
+  text-align: center;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+.toast.error {
+  border-color: var(--danger);
+}
+
+
+.sheen {
+  fill: url(#gradSheen);
+  pointer-events: none;
+}
+.stop-a { stop-color: var(--disc-a); }
+.stop-b { stop-color: var(--disc-b); }
+
+.wheel .shadow {
+  position: absolute;
+  left: 18px;
+  top: 18px;
+  width: 524px;
+  height: 524px;
+  border-radius: 50%;
+  box-shadow: 0 18px 30px rgba(0, 10, 50, 0.38), 0 4px 10px rgba(0, 10, 50, 0.25);
+  pointer-events: none;
+}
+/* Same look as :hover, driven by JavaScript while a file is being dragged over the wheel. */
+.wedge.hot path {
+  fill: var(--wedge-hover);
+}
+.wedge.active.hot path {
+  fill: url(#gradActive);
+}
+.card.hot:not(.disabled):not(.current) {
+  background: var(--card-hover);
+  border-color: rgba(255, 255, 255, 0.85);
+  filter: drop-shadow(0 0 8px rgba(160, 200, 255, 0.55));
+}
+/* Editor cards: bigger, easier sliders and buttons. */
+.editor input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 9px;
+  border-radius: 999px;
+  outline: none;
+  background: linear-gradient(to right, #fff var(--p, 50%), rgba(255, 255, 255, 0.28) var(--p, 50%));
+}
+.editor input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  border: 4px solid var(--accent);
+  box-shadow: 0 2px 6px rgba(0, 10, 50, 0.45);
+  cursor: pointer;
+}
+.editor .row label {
+  width: auto;
+  font-size: 14px;
+}
+.editor .row output {
+  min-width: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+}
+output.px::after {
+  content: " px";
+  font-weight: 500;
+  color: var(--text-dim);
+}
+output.kb::after {
+  content: " KB";
+  font-weight: 500;
+  color: var(--text-dim);
+}
+.editor .chip {
+  font-size: 15px;
+  padding: 6px 14px;
+}
+.editor .apply {
+  height: 40px;
+  padding: 0 24px;
+  font-size: 17px;
+  border-radius: 10px;
+}
+.card.editor {
+  padding: 14px 16px;
+  gap: 12px;
+}
+.editor-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.editor-head .title {
+  flex: 1;
+  min-width: 0;
+}
+.editor .editor-head .apply {
+  flex: none;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 14px;
+}
+/* A selection of several files shows as a small stack. */
+.thumb.stack {
+  box-shadow: 6px 6px 0 -1px rgba(255, 255, 255, 0.6), 12px 12px 0 -2px rgba(255, 255, 255, 0.32), 0 6px 16px rgba(0, 10, 50, 0.45);
+  margin: 0 12px 10px 0;
+}
+/* ================================================================ menu style
+   Same blue glass, icons and colours as the wheel, laid out like a context menu. */
+#app.menu {
+  zoom: 0.78;
+  width: 769px;
+  height: 554px;
+  --cx: 36px;
+  --cy: 36px;
+}
+#app.menu.flip {
+  --cx: 733px;
+}
+/* panels written for the wheel's 0.6 zoom keep the same real size */
+#app.menu .panel {
+  zoom: 0.77;
+}
+#app.menu .panel {
+  left: 50%;
+  top: 50%;
+}
+
+#app.menu .wheel {
+  left: var(--cx);
+  top: var(--cy);
+  width: 236px;
+  height: auto;
+  filter: none;
+  transform-origin: top left;
+}
+#app.menu.flip .wheel {
+  left: calc(var(--cx) - 236px);
+  transform-origin: top right;
+}
+.menu-panel {
+  position: relative;
+  padding: 8px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, var(--disc-a), var(--disc-b));
+  border: 1.5px solid var(--disc-stroke);
+  box-shadow: 0 16px 30px rgba(0, 10, 50, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  overflow: hidden;
+  pointer-events: all;
+}
+#app.menu .hub {
+  position: static;
+  transform: none;
+  width: auto;
+  height: auto;
+  border-radius: 12px;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  text-align: left;
+  flex-wrap: wrap;
+}
+#app.menu .hub .thumb {
+  width: 46px;
+  height: 36px;
+  flex: none;
+  border-width: 1.5px;
+  border-radius: 5px;
+}
+#app.menu .hub .thumb.glyph-only svg {
+  width: 36px;
+  height: 36px;
+}
+#app.menu .hub .thumb.stack {
+  margin: 0 8px 6px 0;
+}
+#app.menu .hub-name {
+  max-width: 120px;
+  font-size: 15px;
+  text-align: left;
+}
+#app.menu .hub-meta {
+  font-size: 12px;
+  width: 100%;
+  margin-left: 0;
+}
+
+.mi {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 42px;
+  padding: 0 12px;
+  border-radius: 11px;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+.mi svg {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  stroke: #fff;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.mi span {
+  flex: 1;
+}
+.mi svg.chev {
+  width: 16px;
+  height: 16px;
+  opacity: 0.75;
+}
+#app.menu.flip .mi svg.chev {
+  transform: rotate(180deg);
+}
+.mi:hover,
+.mi.hot {
+  background: rgba(255, 255, 255, 0.2);
+}
+.mi.active {
+  background: rgba(255, 255, 255, 0.2);
+}
+.sep {
+  height: 1px;
+  margin: 6px -8px;
+  background: rgba(255, 255, 255, 0.24);
+}
+
+/* fly-out list */
+#app.menu .cards {
+  left: calc(var(--cx) + 244px);
+  top: 36px;
+  width: 292px;
+  height: auto;
+  max-height: calc(100% - 60px);
+  display: block;
+  padding: 8px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, var(--disc-a), var(--disc-b));
+  border: 1.5px solid var(--disc-stroke);
+  box-shadow: 0 16px 30px rgba(0, 10, 50, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  overflow-y: auto;
+  scrollbar-width: none;
+  pointer-events: all;
+  animation: flyout-in 0.14s ease-out;
+}
+#app.menu.flip .cards {
+  left: calc(var(--cx) - 244px - 292px);
+}
+#app.menu .cards:empty {
+  display: none;
+}
+@keyframes flyout-in {
+  from {
+    opacity: 0;
+    transform: translateX(calc(-8px * var(--dir)));
+  }
+}
+#app.menu .card {
+  animation: none;
+  opacity: 1;
+  transform: none;
+  min-height: 0;
+  margin: 0;
+  padding: 7px 8px;
+  gap: 9px;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  filter: none;
+  border-radius: 10px;
+}
+#app.menu .card + .card {
+  margin-top: 2px;
+}
+#app.menu .card .ico {
+  width: 28px;
+  height: 28px;
+}
+#app.menu .card .ico svg {
+  width: 15px;
+  height: 15px;
+}
+#app.menu .card .tick svg {
+  width: 15px;
+  height: 15px;
+}
+#app.menu .card .title {
+  font-size: 15px;
+}
+#app.menu .card .sub {
+  font-size: 12px;
+}
+#app.menu .card:hover:not(.disabled):not(.current),
+#app.menu .card.hot:not(.disabled):not(.current) {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: transparent;
+  filter: none;
+}
+#app.menu .card.editor {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+#app.menu .card.confirming {
+  background: linear-gradient(135deg, rgba(220, 60, 60, 0.9), rgba(170, 30, 50, 0.85));
+}
+/* Long lists (more than seven options) show titles only so they always fit. */
+.cards.dense .card {
+  min-height: 40px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.cards.dense .card .sub {
+  display: none;
+}
+.cards.dense .card .ico {
+  width: 30px;
+  height: 30px;
+}
+/* menu style: the header shows just the thumbnail and name (no size line) */
+#app.menu .hub-meta {
+  display: none;
+}
+#app.menu .hub {
+  flex-wrap: nowrap;
+}
+#app.menu .hub .thumb.stack {
+  margin-bottom: 0;
+}
+/* menu style header: thumbnail on the left, the name with the size directly below it on the right */
+#app.menu .hub {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: "thumb name" "thumb meta";
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 1px;
+}
+#app.menu .hub .thumb {
+  grid-area: thumb;
+  margin: 0;
+}
+#app.menu .hub-name {
+  grid-area: name;
+  align-self: end;
+}
+#app.menu .hub-meta {
+  display: block;
+  grid-area: meta;
+  align-self: start;
+  width: auto;
+  margin: 0;
+  text-align: left;
+}
+/* rename editor: the name on its own, the file type shown beside it and kept */
+.rename-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rename-row input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(0, 10, 50, 0.35);
+  color: #fff;
+  padding: 0 12px;
+  font: inherit;
+  font-size: 16px;
+  user-select: text;
+  -webkit-user-select: text;
+  outline: none;
+}
+.rename-row input:focus {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.25);
+}
+.rename-row .ext {
+  flex: none;
+  padding: 7px 11px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.2);
+  font-size: 15px;
+  font-weight: 600;
+}
+.editor .actions .hint {
+  font-size: 13px;
+  color: var(--text-dim);
+}
+/* colourful icon tiles */
+.mi .mi-ico {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: linear-gradient(135deg, var(--c1, #5b9bff), var(--c2, #2b6ae0));
+  box-shadow: 0 2px 5px rgba(0, 10, 50, 0.25);
+}
+.mi .mi-ico svg {
+  width: 16px;
+  height: 16px;
+  stroke: #fff;
+}
+.mi .mi-label {
+  flex: 1;
+}
+.card .ico {
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--c1, #5b9bff), var(--c2, #2b6ae0));
+  box-shadow: 0 2px 5px rgba(0, 10, 50, 0.25);
+}
+.card .ico svg {
+  stroke: #fff;
+}
+/* ================================================================ drop zone */
+/* the wheel is only a preview until files are dropped */
+#app.dropzone .wedge,
+#app.dropzone .mi {
+  opacity: 0.4;
+  pointer-events: none;
+}
+#app.dropzone .wedge[data-verb="record"],#app.dropzone .mi[data-verb="record"]{opacity:1;pointer-events:auto}
+.wedge[data-verb="record"] .glyph{stroke:#fff}
+.drop-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  cursor: pointer;
+}
+.drop-hint svg {
+  width: 44px;
+  height: 44px;
+  stroke: #fff;
+  fill: none;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.drop-hint .hub-meta {
+  max-width: 170px;
+  white-space: normal;
+  line-height: 1.25;
+}
+#app.dropzone .hub {
+  border-style: dashed;
+  border-width: 2px;
+  pointer-events: all;
+}
+#app.over .hub {
+  background: rgba(255, 255, 255, 0.3);
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.7), 0 0 26px rgba(255, 255, 255, 0.55);
+}
+#app.over .wedge,
+#app.over .mi {
+  opacity: 0.4;
+}
+/* the drop zone icon is an ordinary small icon (the wheel's own svg rules must not reach it) */
+.hub .drop-hint {
+  position: static;
+  width: auto;
+  height: auto;
+  pointer-events: none;
+}
+.hub .drop-hint svg {
+  position: static !important;
+  width: 46px !important;
+  height: 46px !important;
+  flex: none;
+  fill: none !important;
+  stroke: #fff !important;
+  stroke-width: 1.8 !important;
+  transform: none !important;
+  overflow: visible;
+}
+.hub .drop-hint .hub-name,
+.hub .drop-hint .hub-meta {
+  position: static;
+  width: auto;
+  max-width: 100%;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  text-align: center;
+}
+/* The empty menu header has one centred column instead of thumbnail/detail grid areas. */
+#app.menu.dropzone .hub {
+  position: relative;
+  left: auto;
+  top: auto;
+  display: flex;
+  justify-content: center;
+}
+#app.menu .hub .drop-hint {
+  width: 100%;
+}
+#app.menu .hub .drop-hint .hub-name,
+#app.menu .hub .drop-hint .hub-meta {
+  align-self: center;
+}
+.drop-close {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.12);
+  pointer-events: auto;
+}
+.drop-close:hover {
+  background: rgba(255, 255, 255, 0.28);
+}
+#app.dropzone:not(.menu) .wheel > .drop-close {
+  top: 12%;
+  right: auto;
+  bottom: auto;
+  left: 88%;
+  transform: translate(-50%, -50%);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--card);
+  border: 1.3px solid var(--card-stroke);
+  box-shadow: 0 3px 10px rgba(16, 40, 105, 0.22);
+  z-index: 2;
+}
+#app.dropzone:not(.menu) .wheel > .drop-close:hover {
+  background: var(--card-hover);
+}
+.drop-close svg {
+  position: static;
+  width: 14px;
+  height: 14px;
+  transform: none;
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+#app.menu.tray-corner{--cy:var(--tray-menu-y,220px)}
+#app.dropzone .hub,#app.dropzone .hub *{cursor:pointer}
+#app:not(.menu) .drop-close{display:none!important}
+#app.dropzone .wedge,#app.dropzone .mi{opacity:1;pointer-events:auto;cursor:pointer}
