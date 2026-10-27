@@ -127,7 +127,7 @@ Installers are written to `src-tauri/target/release/bundle/`. Keep private signi
 
 Tauri 2 · Rust · JavaScript · Vite · Lucide · Inter · FFmpeg · PDFium · optional ImageMagick
 
-Third-party components retain their own licences and notices. See [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) and bundled resource notices. FileConverter source code has not been copied into Halo.
+Dependency licences are included with their packaged components.
 
 ---
 

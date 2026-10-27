@@ -1,4 +1,4 @@
-//! Halo's own typed conversion presets. No imported FileConverter code or commands.
+//! Typed conversion presets.
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 
