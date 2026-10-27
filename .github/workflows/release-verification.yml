@@ -1,0 +1,44 @@
+name: Verify release assets
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to verify
+        default: v0.1.0
+        required: true
+permissions:
+  contents: write
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
+        with:
+          toolchain: stable
+      - name: Download draft or published assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') { throw 'Invalid release tag' }
+          gh release download $env:RELEASE_TAG --repo "${{ github.repository }}" --dir release-assets
+          if ($LASTEXITCODE -ne 0) { throw 'Download failed' }
+      - name: Verify signatures and reject tampering
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: cargo run --manifest-path scripts/release-verify/Cargo.toml -- $env:RELEASE_TAG release-assets
+      - name: Attach checksums
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          $lines = Get-ChildItem release-assets -File | Where-Object Name -ne SHA256SUMS.txt | ForEach-Object {
+            "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          }
+          $lines | Set-Content -Encoding utf8 SHA256SUMS.txt
+          gh release upload $env:RELEASE_TAG SHA256SUMS.txt --repo "${{ github.repository }}" --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Checksum upload failed' }

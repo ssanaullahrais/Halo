@@ -2,6 +2,7 @@ node_modules
 dist
 src-tauri/target
 src-tauri/gen
+/scripts/release-verify/target/
 
 # Local research, recordings, build outputs and diagnostics
 /output/

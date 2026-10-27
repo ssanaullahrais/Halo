@@ -55,9 +55,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $release = gh api "repos/${{ github.repository }}/releases/tags/v$version" | ConvertFrom-Json
+          $releases = gh api "repos/${{ github.repository }}/releases" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read releases' }
+          $release = $releases | Where-Object tag_name -eq "v$version" | Select-Object -First 1
+          if (!$release) { throw 'Release was not found' }
           $lines = foreach ($asset in $release.assets) {
             if ($asset.digest) { "$($asset.digest -replace '^sha256:','')  $($asset.name)" }
           }
+          if (!$lines) { throw 'Release asset digests were not returned' }
           $lines | Set-Content -Encoding utf8 SHA256SUMS.txt
           gh release upload "v$version" SHA256SUMS.txt --clobber --repo "${{ github.repository }}"
