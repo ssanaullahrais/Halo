@@ -9,7 +9,7 @@
 Compress, convert, resize, share and record your screen from a lightweight Windows desktop app.
 
 [![Release](https://img.shields.io/github/v/release/ssanaullahrais/Halo?color=376bff)](https://github.com/ssanaullahrais/Halo/releases/latest)
-[![Build](https://github.com/ssanaullahrais/Halo/actions/workflows/release.yml/badge.svg)](https://github.com/ssanaullahrais/Halo/actions/workflows/release.yml)
+[![Release verification](https://github.com/ssanaullahrais/Halo/actions/workflows/release-verification.yml/badge.svg)](https://github.com/ssanaullahrais/Halo/actions/workflows/release-verification.yml)
 ![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?logo=windows)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24C8D8?logo=tauri)
 
