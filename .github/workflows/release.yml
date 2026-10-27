@@ -48,7 +48,7 @@ jobs:
             See CHANGELOG.md for changes and README.md for optional engine setup.
           releaseDraft: true
           prerelease: false
-          args: --locked
+          args: -- --locked
       - name: Upload checksums
         shell: pwsh
         env:

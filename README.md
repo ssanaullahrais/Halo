@@ -118,7 +118,7 @@ Create installers:
 
 ```powershell
 $env:TAURI_SIGNING_PRIVATE_KEY = 'C:\secure\halo-updater.key'
-npm run tauri build -- --locked
+npm run tauri build -- -- --locked
 ```
 
 Installers are written to `src-tauri/target/release/bundle/`. Keep private signing keys outside the repository. See [the release guide](docs/RELEASING.md) for version tags, GitHub secrets and publishing.
