@@ -23,6 +23,45 @@ Compress · Convert · Resize · Edit · Share · Record — all from one radial
 
 ---
 
+## How to use
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 1. Hold a file
+
+**Press and hold the left mouse button** on any file or folder. The radial wheel opens right under your pointer.
+
+</td>
+<td width="50%" valign="top">
+
+### 2. Or Ctrl + click
+
+Prefer a quick tap? **Hold `Ctrl` and left-click** the file. The wheel opens instantly, with no waiting.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+### 3. Pick an action
+
+Move to **Compress, Convert, Resize, Edit, Files, More or Record**, then choose an option from the list that slides out.
+
+</td>
+<td valign="top">
+
+### 4. Done
+
+Halo does the job in place and saves the result next to your original. Nothing is uploaded unless you choose an upload action.
+
+</td>
+</tr>
+</table>
+
+Other ways in: open Halo from the **tray icon**, press **`Ctrl` + `Alt` + `H`**, or click the center of the wheel to browse for a file. Switch between the **radial wheel** and a compact **menu list** in Settings.
+
 ## Why Halo?
 
 Everyday file jobs usually mean opening a heavy app, hunting for a website, or uploading a private file to a stranger's server. Halo puts them one gesture away: hold a file, pick an action, done. You can also open Halo from the tray, choose an action, then select your file.
