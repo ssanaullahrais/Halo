@@ -114,6 +114,33 @@ function render(n) {
     };
     document.getElementById("openlink").onclick = () => invoke("open_path", { path: n.urls[0] }).then(dismiss, () => dismiss());
     hideAfter = 8000;
+  } else if (n.kind === "update") {
+    host.innerHTML = `
+      <div class="done">
+        <div class="badge info">${svg("info")}</div>
+        <div class="close" id="x">${svg("x")}</div>
+        <div class="head"><div style="min-width:0"><h3>Halo ${esc(n.version)} is ready</h3><div class="detail">A new version has been downloaded. Restart to finish updating.</div></div></div>
+        <button class="btn primary" id="restart">${svg("check")}Restart &amp; update</button>
+        <button class="btn" id="later">Later</button>
+      </div>`;
+    document.getElementById("x").onclick = dismiss;
+    document.getElementById("later").onclick = dismiss;
+    document.getElementById("restart").onclick = async (e) => {
+      const button = e.currentTarget;
+      button.disabled = true;
+      button.lastChild.textContent = "Updating…";
+      clearTimeout(timer);
+      pinned = true;
+      try {
+        await invoke("install_update");
+      } catch (err) {
+        button.disabled = false;
+        button.lastChild.textContent = "Restart & update";
+        const detail = host.querySelector(".detail");
+        if (detail) detail.textContent = String(err).includes("Finish your") ? String(err) : "Could not install the update. Try again from Settings.";
+      }
+    };
+    hideAfter = 20000;
   } else {
     // Quick messages use the same card as results: a badge on top, then the message.
     const error = n.tone === "error";
@@ -125,7 +152,7 @@ function render(n) {
         <h3>${esc(n.text)}</h3>
       </div>`;
     document.getElementById("x").onclick = dismiss;
-    hideAfter = error ? 4500 : 2200;
+    hideAfter = n.duration || (error ? 4500 : 2200);
   }
   arm(hideAfter);
 }

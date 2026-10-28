@@ -26,7 +26,9 @@ fn publish(app:&tauri::AppHandle,phase:&str,version:Option<String>,percent:Optio
   let Some(update)=update else{publish(&app,"current",None,None,"You have the latest version of Halo.");return Ok::<_,String>(());};
   let version=update.version.clone();publish(&app,"downloading",Some(version.clone()),None,"Downloading update…");let mut received=0u64;
   let bytes=update.download(|chunk,total|{received+=chunk as u64;let percent=total.filter(|t|*t>0).map(|t|((received.saturating_mul(100)/t).min(100))as u8);publish(&app,"downloading",Some(version.clone()),percent,"Downloading update…");},||{}).await.map_err(|e|e.to_string())?;
-  *READY.lock().unwrap()=Some(Ready{update,bytes});publish(&app,"ready",Some(version),Some(100),"Update ready. Restart Halo when your work is finished.");Ok(())
+  *READY.lock().unwrap()=Some(Ready{update,bytes});publish(&app,"ready",Some(version.clone()),Some(100),"Update ready. Restart Halo when your work is finished.");
+  // Tell the user right away, in the same corner card Halo uses for everything else, even with the app open.
+  crate::show_notice(app.clone(),serde_json::json!({"kind":"update","version":version}));Ok(())
  }.await;
  CHECKING.store(false,Ordering::SeqCst);
  if let Err(error)=result{eprintln!("Halo update check: {error}");publish(&app,"unavailable",None,None,"Could not check for updates. Try again later.");}

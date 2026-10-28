@@ -32,3 +32,17 @@
 /* Keep circular dismiss targets square in every interaction state. */
 #recorderBar #hideRecorder,#recorderResult #dismissResult{display:grid;place-items:center;box-sizing:border-box;flex:0 0 36px;width:36px;min-width:36px;max-width:36px;height:36px;min-height:36px;max-height:36px;aspect-ratio:1;padding:0;border:0;border-radius:50%;transition:background-color .12s,color .12s;transform:none}
 #recorderGear:disabled{opacity:.4;background:transparent;cursor:default}
+
+#restartRecorder.confirm{background:#ffe9ec;color:#d3213f;border-color:#f3b4be}
+
+#recorderResult #removeRecording{color:#d3213f}#recorderResult #removeRecording:hover{background:#ffe9ec}
+
+#annotationToggle{width:28px;height:32px;padding:4px}#annotationToggle svg{width:20px;height:20px}
+
+/* While saving, the (disabled) Finish slot becomes a progress pill with the percentage. */
+#finishRecorder.saving{position:relative;overflow:hidden;min-width:112px;opacity:1;color:#075de2;background:linear-gradient(90deg,#bcd6ff var(--save,0%),#e3eeff var(--save,0%))}
+#finishRecorder.saving svg{display:none}
+
+/* Saving: the main button steps aside and the progress pill takes its look (same red, size and shape). */
+#finishRecorder.saving{display:flex;align-items:center;justify-content:center;height:47px;width:116px;min-width:116px;padding:0 13px;border-radius:11px;border:1px solid #ff5d69;color:#fff;font-weight:500;background:linear-gradient(90deg,#d81f37 var(--save,0%),#ff3045 var(--save,0%));box-shadow:inset 0 0 8px #ffffff20;opacity:1}
+#finishRecorder.saving span{position:relative}

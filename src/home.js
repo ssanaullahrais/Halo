@@ -35,7 +35,7 @@ const DEFAULTS = {
   save_mode: "beside",
   // These two are front-end-only wheel preferences (not round-tripped through the Rust
   // settings store), but still live in `draft`/`saved` so Save behaves consistently for them.
-  hover_open: false,
+  hover_open: true,
   opacity: 100,
 };
 let saved = null;
@@ -326,7 +326,7 @@ async function start() {
     ...clone(DEFAULTS),
     ...s,
     share: s.share || providers.map((p) => p.id),
-    hover_open: localStorage.getItem("halo.hoverOpen") === "true",
+    hover_open: localStorage.getItem("halo.hoverOpen") !== "false",
     opacity: Number(localStorage.getItem("halo.opacity")) || 100,
   };
   draft = clone(saved);

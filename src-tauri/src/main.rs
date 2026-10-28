@@ -112,6 +112,8 @@ mod placement_tests {
 const DEFAULT_HOLD_MS: u64 = 250;
 /// How far (physical pixels) the pointer may drift during the hold.
 const SLOP: i32 = 8;
+/// A held touchpad press drifts more than a mouse button does, so a hold tolerates a wider wobble.
+const HOLD_SLOP: i32 = 24;
 
 pub struct Shared {
     visible: AtomicBool,
@@ -310,7 +312,8 @@ fn worker(app: AppHandle, shared: Arc<Shared>, rx: Receiver<Ev>) {
                     let inside_window=x>=l&&x<r&&y>=t&&y<b;
                     let regions=shared.hit_regions.lock().unwrap();let inside=inside_window&&(regions.is_empty()||regions.iter().any(|region|region.contains((x-l)as f64,(y-t)as f64)));drop(regions);
                     if inside||shared.browsing.load(Ordering::SeqCst){continue;}
-                    hide_widget_inner(&app,&shared);
+                    // A wheel opened from the tray (no file yet) stays until closed with a right-click, Esc or its X.
+                    if !shared.pinned.load(Ordering::SeqCst){hide_widget_inner(&app,&shared);}
                 }
                 if ctrl && shared.ctrl_click.load(Ordering::Relaxed) {
                     ctrl_pending = Some((x, y, Instant::now()));
@@ -320,7 +323,7 @@ fn worker(app: AppHandle, shared: Arc<Shared>, rx: Receiver<Ev>) {
             }
             Ok(Ev::Move(x, y)) => {
                 if let Some((px, py, _)) = pending {
-                    if (x - px).abs() > SLOP || (y - py).abs() > SLOP {
+                    if (x - px).abs() > HOLD_SLOP || (y - py).abs() > HOLD_SLOP {
                         pending = None;
                     }
                 }
@@ -597,7 +600,7 @@ fn show_notice(app: AppHandle, notice: serde_json::Value) {
         let quiet = !shared.notifications.load(Ordering::Relaxed);
         let kind = notice["kind"].as_str().unwrap_or("");
         let is_error = notice["tone"] == "error";
-        if quiet && !is_error && kind != "link" {
+        if quiet && !is_error && kind != "link" && kind != "update" {
             return;
         }
     }

@@ -210,12 +210,16 @@ function thumbHtml(extraClass = "") {
   return `<div class="thumb glyph-only ${extraClass}">${glyphFor()}</div>`;
 }
 
+function closeHintSeen() {
+  try { return localStorage.getItem("halo.closeTipDone") === "1"; } catch { return false; }
+}
+
 function renderHub() {
   const hub = $("hub");
   if (!hub) return;
   if (!S.files.length) {
     $("wheel").querySelector(":scope > .drop-close")?.remove();
-    hub.innerHTML = `<button type="button" class="btn drop-close" aria-label="Close Halo">${svg("x")}</button><div class="drop-hint"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg><div class="hub-name">Select a file</div><div class="hub-meta">Hold a file, or Ctrl + click it — or click here to browse</div></div>`;
+    hub.innerHTML = `<button type="button" class="btn drop-close" aria-label="Close Halo">${svg("x")}</button><div class="drop-hint"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg><div class="hub-name">Select a file</div><div class="hub-meta">Hold a file, or Ctrl + click it</div><div class="hub-meta">Right-click to close</div></div>`;
     const close = hub.querySelector(".drop-close");
     close.onclick = (e) => {
       e.stopPropagation();
@@ -712,7 +716,7 @@ function openEditor(verb, opt, el) {
 }
 
 /* ------------------------------------------------------------------ interaction */
-const hoverOpensOptions = () => localStorage.getItem("halo.hoverOpen") === "true";
+const hoverOpensOptions = () => localStorage.getItem("halo.hoverOpen") !== "false";
 
 // "Hover intent": a wedge only takes over once the pointer has actually stayed on it for a
 // moment, so quickly passing over one on the way to the open cards doesn't switch away from
@@ -959,6 +963,16 @@ listen("halo://show", async ({ payload }) => {
   if (S.style === "menu") renderMenu();
   else renderWheel();
   requestAnimationFrame(() => {app.classList.add("shown");queueWidgetFit();});
+  if (S.drop) {
+    // The tray wheel stays open until dismissed, so say how for the first few opens.
+    // (say() would close the widget, so the toast goes straight to the notice window.)
+    let shown = 0;
+    try { shown = Number(localStorage.getItem("halo.closeTipShown") || 0); } catch {}
+    if (shown < 3 && !closeHintSeen()) {
+      try { localStorage.setItem("halo.closeTipShown", String(shown + 1)); } catch {}
+      invoke("show_notice", { notice: { kind: "toast", tone: "ok", text: "Halo stays open. Right-click it or press Esc to close.", duration: 8000 } });
+    }
+  }
   if(payload.requested_verb){highlight(payload.requested_verb);renderCards(payload.requested_verb);}
   // Started from the Explorer right-click menu: run that action straight away.
   if (payload.auto) {
@@ -996,9 +1010,40 @@ listen("halo://progress", ({ payload }) => updateProgress(payload));
 
 // Clicking the empty glass around the wheel closes it.
 document.addEventListener("pointerdown", (e) => {
-  if (S.drop) return; // the drop zone stays open while you fetch files from another window
-  if (!e.target.closest(".wedge, .mi, .menu-panel, .disc, .card, .cards, .ring, .btn, .done, .toast, .sizes")) closeWidget();
+  const inside = e.target.closest(".wedge, .mi, .menu-panel, .disc, .card, .cards, .ring, .btn, .done, .toast, .sizes");
+  if (S.drop) {
+    // The drop zone stays open while you fetch files from another window; a click away only tucks the options in.
+    if (!inside) collapseOptions();
+    return;
+  }
+  if (!inside) closeWidget();
 });
+
+// Options opened by hovering a wedge tuck away again once the pointer leaves the wheel and its option cards.
+const WIDGET_AREA = ".wheel, .cards, .menu-panel, .card, .panel, .sizes, .toast";
+let optionsLeaveTimer = null;
+function collapseOptions() {
+  clearTimeout(optionsLeaveTimer);
+  const typing = document.activeElement?.matches?.("input, textarea, select");
+  if (!S.verb || S.expanded || S.confirming || typing) return;
+  highlight(null);
+  renderCards(null);
+}
+document.addEventListener("pointerover", (e) => {
+  if (e.target.closest?.(WIDGET_AREA)) clearTimeout(optionsLeaveTimer);
+});
+const scheduleCollapse = () => {
+  if (!hoverOpensOptions() || !S.verb) return;
+  clearTimeout(optionsLeaveTimer);
+  optionsLeaveTimer = setTimeout(collapseOptions, 450);
+};
+document.addEventListener("pointerout", (e) => {
+  if (e.relatedTarget?.closest?.(WIDGET_AREA)) return;
+  scheduleCollapse();
+});
+// Leaving the window altogether may not report a pointerout, so listen for it directly too.
+document.documentElement.addEventListener("pointerleave", scheduleCollapse);
+document.documentElement.addEventListener("mouseleave", scheduleCollapse);
 
 // Holding and moving the pointer over the wheel (including the hub) drags the widget;
 // a plain click/tap still reaches its normal handler (e.g. the hub's click-to-browse).
@@ -1022,6 +1067,7 @@ document.addEventListener("pointerup", () => (dragFrom = null));
 // Right-click anywhere closes the widget.
 document.addEventListener("contextmenu", (e) => {
   e.preventDefault();
+  try { localStorage.setItem("halo.closeTipDone", "1"); } catch {}
   closeWidget();
 });
 
