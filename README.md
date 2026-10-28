@@ -97,6 +97,25 @@ Animated GIFs have separate animation-preserving options. Document conversion de
 
 ## Screen recording
 
+<p align="center">
+  <img src="docs/images/halo-recorder-toolbar.png" alt="The Halo recording toolbar" width="760" />
+</p>
+
+<table>
+<tr>
+<td align="center" width="50%"><img src="docs/images/halo-recorder-sources.png" alt="Choose screen, window or area" /><br /><sub><b>Choose what to capture</b></sub></td>
+<td align="center" width="50%"><img src="docs/images/halo-recorder-countdown.png" alt="Recording countdown" height="200" /><br /><sub><b>Countdown, then record</b></sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/images/halo-recorder-audio.png" alt="Audio settings" /><br /><sub><b>Microphone and system audio</b></sub></td>
+<td align="center"><img src="docs/images/halo-recorder-cursor.png" alt="Cursor effects" /><br /><sub><b>Cursor and click effects</b></sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/images/halo-recorder-output.png" alt="Output settings" /><br /><sub><b>Output and quality</b></sub></td>
+<td align="center"><img src="docs/images/halo-recorder-saved.png" alt="Recording saved" /><br /><sub><b>Saved and ready to share</b></sub></td>
+</tr>
+</table>
+
 - Record a **screen, window or selected area** at original resolution, with 30 or 60 fps options.
 - Capture **microphone and system audio**, with separate controls.
 - **Pause, resume and finish** from the movable recording toolbar.
