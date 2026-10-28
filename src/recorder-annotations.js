@@ -20,7 +20,7 @@ function draw(a){
  ctx.shadowColor='#102b4d52';ctx.shadowBlur=5;ctx.shadowOffsetY=2;
  const border=Math.max(2,weight*.65);
  if(a.kind==='arrow'){
-  const x=a.x+a.w,y=a.y+a.h,angle=Math.atan2(a.h,a.w),length=Math.min(72,12+weight*2+Math.hypot(a.w,a.h)*.14,Math.hypot(a.w,a.h)*.7);
+  const x=a.x+a.w,y=a.y+a.h,angle=Math.atan2(a.h,a.w),length=Math.min(52,10+weight*1.6+Math.hypot(a.w,a.h)*.09,Math.hypot(a.w,a.h)*.6);
   const head=new Path2D();head.moveTo(x,y);head.lineTo(x-length*Math.cos(angle-.5),y-length*Math.sin(angle-.5));head.lineTo(x-length*.68*Math.cos(angle),y-length*.68*Math.sin(angle));head.lineTo(x-length*Math.cos(angle+.5),y-length*Math.sin(angle+.5));head.closePath();
   const shaft=new Path2D();shaft.moveTo(a.x,a.y);shaft.lineTo(x-length*.5*Math.cos(angle),y-length*.5*Math.sin(angle));
   ctx.strokeStyle='#ffffff';ctx.lineWidth=weight+border*2;ctx.stroke(shaft);ctx.lineWidth=border*2;ctx.fillStyle='#ffffff';ctx.fill(head);ctx.stroke(head);

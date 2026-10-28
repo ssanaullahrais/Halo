@@ -215,7 +215,7 @@ function renderHub() {
   if (!hub) return;
   if (!S.files.length) {
     $("wheel").querySelector(":scope > .drop-close")?.remove();
-    hub.innerHTML = `<button type="button" class="btn drop-close" aria-label="Close Halo">${svg("x")}</button><div class="drop-hint"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg><div class="hub-name">Add files</div><div class="hub-meta">Click or drag them here</div></div>`;
+    hub.innerHTML = `<button type="button" class="btn drop-close" aria-label="Close Halo">${svg("x")}</button><div class="drop-hint"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg><div class="hub-name">Select a file</div><div class="hub-meta">Hold a file, or Ctrl + click it — or click here to browse</div></div>`;
     const close = hub.querySelector(".drop-close");
     close.onclick = (e) => {
       e.stopPropagation();

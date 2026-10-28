@@ -18,7 +18,7 @@ pub fn asset_on_canvas(a:&Annotation,(x,y,width,height):(i32,i32,u32,u32))->(Str
  let border=(a.stroke*0.65).max(2.);
  let shape=match a.kind.as_str(){
  "arrow"=>{
-  let weight=(a.stroke*2.3).min(a.stroke+a.w.hypot(a.h)/100.);let border=(weight*0.65).max(2.);let ex=a.x+a.w;let ey=a.y+a.h;let angle=a.h.atan2(a.w);let length=(12.+weight*2.+a.w.hypot(a.h)*0.14).min(72.).min(a.w.hypot(a.h)*0.7);
+  let weight=(a.stroke*2.3).min(a.stroke+a.w.hypot(a.h)/100.);let border=(weight*0.65).max(2.);let ex=a.x+a.w;let ey=a.y+a.h;let angle=a.h.atan2(a.w);let length=(10.+weight*1.6+a.w.hypot(a.h)*0.09).min(52.).min(a.w.hypot(a.h)*0.6);
   let head=format!("M{ex} {ey}L{} {}L{} {}L{} {}Z",ex-length*(angle-0.5).cos(),ey-length*(angle-0.5).sin(),ex-length*0.68*angle.cos(),ey-length*0.68*angle.sin(),ex-length*(angle+0.5).cos(),ey-length*(angle+0.5).sin());
   let shaft=format!("M{} {}L{} {}",a.x,a.y,ex-length*0.5*angle.cos(),ey-length*0.5*angle.sin());
   format!(r##"<g stroke-linecap="round" stroke-linejoin="round"><g filter="url(#stickerShadow)" stroke="#ffffff"><path d="{shaft}" fill="none" stroke-width="{}"/><path d="{head}" fill="#ffffff" stroke-width="{}"/></g><path d="{shaft}" fill="none" stroke="{}" stroke-width="{}"/><path d="{head}" fill="{}"/></g>"##,weight+border*2.,border*2.,a.color,weight,a.color)

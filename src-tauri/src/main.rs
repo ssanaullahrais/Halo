@@ -548,9 +548,19 @@ fn open_home(app: &AppHandle) {
         let _ = win.set_focus();
         return;
     }
+    // Cap height to a share of the screen's work area so Settings doesn't overflow shorter/scaled displays.
+    let height = app
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| {
+            let area = m.work_area();
+            (area.size.height as f64 / m.scale_factor() * 0.7).clamp(600.0, 820.0)
+        })
+        .unwrap_or(820.0);
     let _ = tauri::WebviewWindowBuilder::new(&app, "home", tauri::WebviewUrl::App("home.html".into()))
         .title("Halo")
-        .inner_size(1000.0, 820.0)
+        .inner_size(1000.0, height)
         .resizable(false)
         .maximizable(false)
         .center()
