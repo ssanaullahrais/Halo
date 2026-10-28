@@ -1,20 +1,40 @@
 <div align="center">
 
-<img src="app-icon.png" width="80" alt="Halo" />
+<img src="app-icon.png" alt="Halo" width="96" height="96" />
 
 # Halo
 
 **Quick file actions and screen recording for Windows.**
 
-[Download](https://github.com/ssanaullahrais/Halo/releases/latest) · [Report an issue](https://github.com/ssanaullahrais/Halo/issues) · [Changelog](CHANGELOG.md)
+Compress · Convert · Resize · Edit · Share · Record — all from one radial wheel, one tray icon and two shortcuts.
+
+[![Latest release](https://img.shields.io/github/v/release/ssanaullahrais/Halo?style=flat-square&label=release)](https://github.com/ssanaullahrais/Halo/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/ssanaullahrais/Halo/total?style=flat-square)](https://github.com/ssanaullahrais/Halo/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=flat-square)](#download)
+[![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB?style=flat-square)](https://tauri.app)
+
+[Download](#download) · [File tools](#file-tools) · [Screen recording](#screen-recording) · [Privacy](#privacy) · [Build from source](#build-from-source)
 
 </div>
 
-Hold a file and choose an action from the **radial wheel** or **menu list**. You can also open Halo from the tray, choose an action, then select your file.
+<p align="center">
+  <a href="docs/images/halo-file-tools-overview.png"><img src="docs/images/halo-file-tools-overview.png" alt="Halo radial wheel, menu list and file actions" width="900" /></a>
+</p>
+<p align="center">
+  <a href="docs/images/halo-recording-overview.png"><img src="docs/images/halo-recording-overview.png" alt="Halo recorder with capture modes, settings and drawing tools" width="900" /></a>
+</p>
+
+<p align="center"><a href="docs/SCREENSHOTS.md">See every menu and recorder screenshot →</a></p>
+
+---
+
+## Why Halo?
+
+Everyday file jobs usually mean opening a heavy app, hunting for a website, or uploading a private file to a stranger's server. Halo puts them one gesture away: hold a file, pick an action, done. You can also open Halo from the tray, choose an action, then select your file.
+
+The same app records your screen, with drawing tools and cursor effects that are baked into the saved video, so you can go from capture to a shareable clip without a second program.
 
 ## File tools
-
-[![Halo wheel, menus and file actions](docs/images/halo-file-tools-overview.png)](docs/images/halo-file-tools-overview.png)
 
 | Action | Options |
 | --- | --- |
@@ -27,7 +47,7 @@ Hold a file and choose an action from the **radial wheel** or **menu list**. You
 
 Options adapt to the file you select. Not every action applies to every format.
 
-## Conversion formats
+### Conversion formats
 
 | Type | Open these formats | Convert to |
 | --- | --- | --- |
@@ -43,8 +63,6 @@ Animated GIFs have separate animation-preserving options. Document conversion de
 
 ## Screen recording
 
-[![Halo recorder, capture modes, settings and drawing tools](docs/images/halo-recording-overview.png)](docs/images/halo-recording-overview.png)
-
 - Record a **screen, window or selected area** at original resolution, with 30 or 60 fps options.
 - Capture **microphone and system audio**, with separate controls.
 - **Pause, resume and finish** from the movable recording toolbar.
@@ -55,37 +73,57 @@ Animated GIFs have separate animation-preserving options. Document conversion de
 
 Choose **Area → Record**, drag your region and release to begin. Press **Esc** to cancel selection. Recording quality and smoothness depend on your hardware and graphics driver.
 
-[See every menu and recorder screenshot →](docs/SCREENSHOTS.md)
+## Download
 
-## Install
+Get the latest installer from the **[Releases page](https://github.com/ssanaullahrais/Halo/releases/latest)**.
 
-Download the **x64 setup EXE** from [Releases](https://github.com/ssanaullahrais/Halo/releases/latest). An MSI is also available.
+| File | Use it when |
+| --- | --- |
+| x64 setup `.exe` | You want the normal installer (recommended) |
+| `.msi` | You deploy with Windows Installer or Group Policy |
 
-Requires **64-bit Windows 10/11 and WebView2**. FFmpeg powers video, audio and recording. Optional engines can be checked in **Settings → System**.
+Requires **64-bit Windows 10 or 11** and the WebView2 runtime. FFmpeg powers video, audio and recording. Optional engines can be checked in **Settings → System**.
 
-Default shortcuts: **Ctrl + Alt + H** for Halo and **Ctrl + Alt + R** for recording. Both are configurable.
+> **Updates are automatic.** Halo checks GitHub in the background and verifies signed downloads. Open **Settings → About** to check manually or choose **Update & restart**. Installation is blocked while a recording, conversion or upload is running.
 
-## Automatic updates
+## Keyboard shortcuts
 
-Halo checks for updates in the background and verifies signed downloads. Open **Settings → About** to check manually or choose **Update & restart**. Installation is blocked while a recording, conversion or upload is running.
+| Keys | Action |
+| --- | --- |
+| `Ctrl` + `Alt` + `H` | Open Halo |
+| `Ctrl` + `Alt` + `R` | Start recording |
+| `Esc` | Cancel area selection |
 
-Update signatures are separate from Windows publisher certificates. Windows may show an unknown-publisher warning for the installer.
+Both global shortcuts are configurable in Settings.
 
 ## Privacy
 
-Files and recordings are processed locally. Upload actions send the selected files to your enabled provider. Update checks contact GitHub; optional engine installation downloads the required component.
+Files and recordings are processed **locally**. Upload actions send the selected files to the provider you enabled, and only when you choose them. Update checks contact GitHub; optional engine installation downloads the required component.
 
-## Build
+## Code signing
+
+Update downloads carry a separate updater signature that Halo checks before installing. Update signatures are not Windows publisher certificates, so Windows may show an unknown-publisher warning for the installer. Every release is built from this repository by the [release workflow](.github/workflows/release.yml).
+
+## Build from source
+
+You need Node.js 22, Rust stable and the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```powershell
 git clone https://github.com/ssanaullahrais/Halo.git
 cd Halo
 npm ci
-npm run tauri dev
+npm run tauri dev      # run with hot reload
+npm run tauri build    # build the installers
 ```
 
-Requires Node.js 22, Rust stable and the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/). See [the release guide](docs/RELEASING.md) for building signed installers.
+See [the release guide](docs/RELEASING.md) for building signed installers and [the changelog](CHANGELOG.md) for what changed in each version.
+
+## Tech stack
+
+[Tauri 2](https://tauri.app) · Rust · React 19 · Vite · FFmpeg · [Lucide](https://lucide.dev) · Inter
 
 ---
 
-Made by [Sanaullah Rais](https://github.com/ssanaullahrais) · Tauri · Rust · Lucide · Inter
+<div align="center">
+<sub>Made by <a href="https://github.com/ssanaullahrais">Sanaullah Rais</a> · <a href="https://github.com/ssanaullahrais/Halo/issues">Report an issue</a></sub>
+</div>
