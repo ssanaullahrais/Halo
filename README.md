@@ -18,7 +18,7 @@ Compress · Convert · Resize · Edit · Share · Record — all from one radial
 </div>
 
 <p align="center">
-  <img src="docs/images/halo-poster.png" alt="Halo: radial wheel, menu list, compress and convert options, and the screen recorder with audio and cursor settings" />
+  <img src="docs/images/halo-hero.png" alt="Halo: radial wheel, menu list, compress and convert options, and the screen recorder with audio and cursor settings" />
 </p>
 
 ---
