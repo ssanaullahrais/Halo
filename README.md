@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="app-icon.png" alt="Halo" width="96" height="96" />
+<img src="docs/images/halo-logo.png" alt="Halo" width="96" height="96" />
 
 # Halo
 
@@ -18,13 +18,8 @@ Compress · Convert · Resize · Edit · Share · Record — all from one radial
 </div>
 
 <p align="center">
-  <a href="docs/images/halo-file-tools-overview.png"><img src="docs/images/halo-file-tools-overview.png" alt="Halo radial wheel, menu list and file actions" width="900" /></a>
+  <img src="docs/images/halo-workspace.png" alt="Halo: radial wheel, menu list, compress and convert options, and the screen recorder with audio and cursor settings" width="560" />
 </p>
-<p align="center">
-  <a href="docs/images/halo-recording-overview.png"><img src="docs/images/halo-recording-overview.png" alt="Halo recorder with capture modes, settings and drawing tools" width="900" /></a>
-</p>
-
-<p align="center"><a href="docs/SCREENSHOTS.md">See every menu and recorder screenshot →</a></p>
 
 ---
 
