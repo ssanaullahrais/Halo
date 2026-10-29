@@ -236,44 +236,12 @@ pub fn install(id: &str) -> Result<String, String> {
             if !status.success() || crate::capabilities::image_engine_path().is_none() { return Err("The PSD engine couldn't be unpacked.".into()); }
             Ok("PSD / PSB support installed. Reopen the file menu to use it.".into())
         },
-        "ffmpeg" | "edge" => {
-            let package = if id == "ffmpeg" { "Gyan.FFmpeg" } else { "Microsoft.Edge" };
-            let dir = tools_dir();
-            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let log = dir.join(format!("winget-{id}.log"));
-            let log_file = std::fs::File::create(&log).map_err(|e| e.to_string())?;
-            let mut child = Command::new("winget")
-                .args(["install", "--id", package, "-e", "--source", "winget", "--silent", "--disable-interactivity", "--accept-source-agreements", "--accept-package-agreements"])
-                .stdin(Stdio::null())
-                .stdout(log_file.try_clone().map_err(|e| e.to_string())?)
-                .stderr(log_file)
-                .creation_flags(NO_WINDOW)
-                .spawn()
-                .map_err(|_| "Windows Package Manager (winget) isn't available on this PC.".to_string())?;
-            // Never wait forever: a hidden prompt (admin approval, a stuck download) would otherwise hang the button.
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
-            let status = loop {
-                match child.try_wait().map_err(|e| e.to_string())? {
-                    Some(status) => break status,
-                    None if std::time::Instant::now() >= deadline => {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        forget_ffmpeg();
-                        return Err("Installing took longer than 10 minutes and was stopped. Check your internet connection, approve any Windows permission prompt, then try again.".into());
-                    }
-                    None => std::thread::sleep(std::time::Duration::from_millis(500)),
-                }
-            };
-            forget_ffmpeg();
-            let text = String::from_utf8_lossy(&std::fs::read(&log).unwrap_or_default()).to_string();
-            // winget reports "already installed" with a non-zero code; that still means it is there
-            if status.success() || text.to_lowercase().contains("already installed") || text.to_lowercase().contains("no available upgrade") {
-                Ok("Installed.".into())
-            } else {
-                let tail: String = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("The installer didn't finish.").chars().take(140).collect();
-                Err(format!("Installing didn't finish: {tail}"))
-            }
-        }
+        "ffmpeg" => match install_ffmpeg_direct() {
+            Ok(()) => Ok("FFmpeg installed.".into()),
+            // Direct download failed (offline, blocked host): fall back to winget when it exists.
+            Err(direct) => install_with_winget(id, "Gyan.FFmpeg").map_err(|w| format!("{direct} Winget fallback also failed: {w}")),
+        },
+        "edge" => install_with_winget(id, "Microsoft.Edge"),
         "pdfium" => {
             let dir = tools_dir();
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -296,5 +264,112 @@ pub fn install(id: &str) -> Result<String, String> {
             }
         }
         _ => Err("Nothing to install for this item.".into()),
+    }
+}
+
+/// Downloads a portable FFmpeg build into Halo's own tools folder. Needs no winget and no admin rights.
+fn install_ffmpeg_direct() -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Write};
+    const ZIP_URL: &str = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
+    let agent = ureq::AgentBuilder::new().timeout_connect(std::time::Duration::from_secs(20)).timeout_read(std::time::Duration::from_secs(60)).build();
+    let dir = tools_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't create Halo's tools folder: {e}."))?;
+
+    // The publisher posts the checksum next to the zip; the zip is only trusted if it matches.
+    let expected = agent
+        .get(&format!("{ZIP_URL}.sha256"))
+        .call()
+        .map_err(|e| format!("Couldn't reach the FFmpeg download server ({e})."))?
+        .into_string()
+        .map_err(|e| e.to_string())?
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .to_lowercase();
+    if expected.len() != 64 {
+        return Err("The FFmpeg download server returned an unexpected checksum.".into());
+    }
+
+    let archive = dir.join("ffmpeg-download.zip");
+    let result = (|| -> Result<(), String> {
+        let resp = agent.get(ZIP_URL).call().map_err(|e| format!("Couldn't download FFmpeg ({e})."))?;
+        let mut reader = resp.into_reader();
+        let mut file = std::fs::File::create(&archive).map_err(|e| e.to_string())?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 256 * 1024];
+        let started = std::time::Instant::now();
+        loop {
+            let n = reader.read(&mut buf).map_err(|e| format!("The FFmpeg download was interrupted ({e})."))?;
+            if n == 0 { break; }
+            hasher.update(&buf[..n]);
+            file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+            if started.elapsed() > std::time::Duration::from_secs(900) { return Err("The FFmpeg download is taking too long. Check your connection and try again.".into()); }
+        }
+        file.flush().map_err(|e| e.to_string())?;
+        drop(file);
+        if format!("{:x}", hasher.finalize()) != expected {
+            return Err("The FFmpeg download failed its integrity check.".into());
+        }
+
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&archive).map_err(|e| e.to_string())?).map_err(|e| format!("The FFmpeg download wasn't a valid archive ({e})."))?;
+        let index = (0..zip.len())
+            .find(|&i| zip.by_index(i).map(|f| f.name().replace('\\', "/").ends_with("/bin/ffmpeg.exe")).unwrap_or(false))
+            .ok_or("ffmpeg.exe wasn't found in the download.")?;
+        // Extract to a temp name first so a half-written file is never mistaken for a working install.
+        let partial = dir.join("ffmpeg.exe.partial");
+        let mut out = std::fs::File::create(&partial).map_err(|e| e.to_string())?;
+        std::io::copy(&mut zip.by_index(index).map_err(|e| e.to_string())?, &mut out).map_err(|e| e.to_string())?;
+        drop(out);
+        let target = dir.join("ffmpeg.exe");
+        let _ = std::fs::remove_file(&target);
+        std::fs::rename(&partial, &target).map_err(|e| format!("Couldn't save ffmpeg.exe ({e})."))?;
+        if run(&target.to_string_lossy(), &["-version"]).is_none() {
+            let _ = std::fs::remove_file(&target);
+            return Err("The downloaded FFmpeg wouldn't start.".into());
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&archive);
+    forget_ffmpeg();
+    result
+}
+
+/// Installs a winget package without ever hanging: non-interactive, logged, and stopped after 10 minutes.
+fn install_with_winget(id: &str, package: &str) -> Result<String, String> {
+    let dir = tools_dir();
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let log = dir.join(format!("winget-{id}.log"));
+    let log_file = std::fs::File::create(&log).map_err(|e| e.to_string())?;
+    let mut child = Command::new("winget")
+        .args(["install", "--id", package, "-e", "--source", "winget", "--silent", "--disable-interactivity", "--accept-source-agreements", "--accept-package-agreements"])
+        .stdin(Stdio::null())
+        .stdout(log_file.try_clone().map_err(|e| e.to_string())?)
+        .stderr(log_file)
+        .creation_flags(NO_WINDOW)
+        .spawn()
+        .map_err(|_| "Windows Package Manager (winget) isn't available on this PC.".to_string())?;
+    // Never wait forever: a hidden prompt (admin approval, a stuck download) would otherwise hang the button.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+    let status = loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => break status,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                forget_ffmpeg();
+                return Err("Installing took longer than 10 minutes and was stopped. Check your internet connection, approve any Windows permission prompt, then try again.".into());
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(500)),
+        }
+    };
+    forget_ffmpeg();
+    let text = String::from_utf8_lossy(&std::fs::read(&log).unwrap_or_default()).to_string();
+    // winget reports "already installed" with a non-zero code; that still means it is there
+    if status.success() || text.to_lowercase().contains("already installed") || text.to_lowercase().contains("no available upgrade") {
+        Ok("Installed.".into())
+    } else {
+        let tail: String = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("The installer didn't finish.").chars().take(140).collect();
+        Err(format!("Installing didn't finish: {tail}"))
     }
 }
