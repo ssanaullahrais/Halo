@@ -238,16 +238,36 @@ pub fn install(id: &str) -> Result<String, String> {
         },
         "ffmpeg" | "edge" => {
             let package = if id == "ffmpeg" { "Gyan.FFmpeg" } else { "Microsoft.Edge" };
-            let out = Command::new("winget")
-                .args(["install", "--id", package, "-e", "--silent", "--accept-source-agreements", "--accept-package-agreements"])
+            let dir = tools_dir();
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            let log = dir.join(format!("winget-{id}.log"));
+            let log_file = std::fs::File::create(&log).map_err(|e| e.to_string())?;
+            let mut child = Command::new("winget")
+                .args(["install", "--id", package, "-e", "--source", "winget", "--silent", "--disable-interactivity", "--accept-source-agreements", "--accept-package-agreements"])
                 .stdin(Stdio::null())
+                .stdout(log_file.try_clone().map_err(|e| e.to_string())?)
+                .stderr(log_file)
                 .creation_flags(NO_WINDOW)
-                .output()
+                .spawn()
                 .map_err(|_| "Windows Package Manager (winget) isn't available on this PC.".to_string())?;
+            // Never wait forever: a hidden prompt (admin approval, a stuck download) would otherwise hang the button.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+            let status = loop {
+                match child.try_wait().map_err(|e| e.to_string())? {
+                    Some(status) => break status,
+                    None if std::time::Instant::now() >= deadline => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        forget_ffmpeg();
+                        return Err("Installing took longer than 10 minutes and was stopped. Check your internet connection, approve any Windows permission prompt, then try again.".into());
+                    }
+                    None => std::thread::sleep(std::time::Duration::from_millis(500)),
+                }
+            };
             forget_ffmpeg();
-            let text = String::from_utf8_lossy(&out.stdout).to_string();
+            let text = String::from_utf8_lossy(&std::fs::read(&log).unwrap_or_default()).to_string();
             // winget reports "already installed" with a non-zero code; that still means it is there
-            if out.status.success() || text.to_lowercase().contains("already installed") || text.to_lowercase().contains("no available upgrade") {
+            if status.success() || text.to_lowercase().contains("already installed") || text.to_lowercase().contains("no available upgrade") {
                 Ok("Installed.".into())
             } else {
                 let tail: String = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("The installer didn't finish.").chars().take(140).collect();

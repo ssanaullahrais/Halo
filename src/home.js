@@ -304,11 +304,14 @@ $("checks").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-fix]");
   if (!b) return;
   const id = b.dataset.fix;
+  if (installing.has(id)) return;
   installing.add(id);
-  say("");
-  await refreshChecks();
+  b.disabled = true;
+  b.textContent = "Installing…";
+  say("Installing. This can take a few minutes. Approve any Windows permission prompt.");
   try {
-    await invoke("install_requirement", { id });
+    const result = await invoke("install_requirement", { id });
+    say(String(result || "Installed."));
   } catch (err) {
     say(String(err), true);
   }
