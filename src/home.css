@@ -959,7 +959,7 @@ body {
 .check-badge{display:flex;align-items:center;gap:7px;white-space:nowrap;padding:7px 11px;border-radius:30px;background:#e8f9f0;color:#08783d;font-size:11px;font-weight:550}.check-badge i{width:9px;height:9px;border-radius:50%;background:#0cb14b}.bad .check-badge{background:#fff2da;color:#986109}.bad .check-badge i{background:#e59b13}
 .check-chevron{width:29px;height:29px;display:grid;place-items:center;border:1px solid #e2e9f8;border-radius:50%;color:#5a6d93;flex:none}.check-chevron svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;transition:transform .15s}.check[open] .check-chevron svg{transform:rotate(180deg)}
 .check-details{margin:0 16px 14px 85px;padding:12px;border-radius:10px;background:#edf3ff;display:flex;align-items:center;justify-content:space-between;gap:12px;overflow-wrap:anywhere;color:#526687;font-size:12px}
-.system-check-footer{display:flex;align-items:center;gap:12px;margin-top:12px;padding:12px;border-radius:15px;background:#edf3ff}.system-info{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;color:#2871ff;background:#e1ebff;font-size:24px;flex:none}.system-check-footer>div{flex:1;min-width:0}.system-check-footer strong,.system-check-footer span:not(.system-info){display:block;font-size:12px;font-weight:400;color:#63749c;line-height:1.5}.system-check-footer strong{color:#344b78}.system-check-footer button{white-space:nowrap;gap:7px}.system-check-footer svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8}
+.system-check-footer{display:flex;align-items:center;gap:12px;margin-top:12px;padding:12px;border-radius:15px;background:#edf3ff}.system-info{width:38px;height:38px;border-radius:12px;display:grid;place-items:center;color:#2871ff;background:#e1ebff;font-size:24px;flex:none}.system-check-footer>div{flex:1;min-width:0}.system-check-footer>div>strong,.system-check-footer>div>span{display:block;font-size:12px;font-weight:400;color:#63749c;line-height:1.5}.system-check-footer strong{color:#344b78}.system-check-footer button{white-space:nowrap;gap:7px}.system-check-footer svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8}
 @media(max-width:780px){.check summary{gap:9px;padding:12px}.check-badge{padding:6px 8px}.check-icon{width:40px;height:45px}.system-check-footer{flex-wrap:wrap}.system-check-footer button{margin-left:auto}}
 
 .shell{grid-template-columns:260px minmax(0,1fr)}.settings-icon{display:inline-flex;align-items:center;justify-content:center;flex:none}.settings-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round}#nav .settings-icon{width:22px}.system-info svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8}.steps .tile .settings-icon{width:auto}.steps .tile svg{width:16px;height:16px}@media(max-width:900px){.shell{grid-template-columns:230px minmax(0,1fr)}}
@@ -973,3 +973,20 @@ body {
 #nav button>.settings-icon svg{width:19px;height:19px}#nav button>div{min-width:0;flex:1}#nav button strong{font-size:13px;line-height:1.5;font-weight:600}#nav button>div>span{font-size:11px;line-height:1.5;margin-top:2px;color:#7183a2}
 #nav button:hover:not(.on){background:#eaf1ff;border-color:#dfe8f9}#nav button.on{background:linear-gradient(115deg,#2563eb,#347bfa);box-shadow:0 4px 10px #2864dc29;border-color:#3678fa}#nav button.on>.settings-icon{background:#ffffff24;color:white}#nav button.on>div>span{color:#edf4ff}#nav button:focus-visible{outline:2px solid #4488ff;outline-offset:2px}.ver{padding-left:12px;color:#8291ad}
 .pages{min-height:0;padding:23px 28px 20px}.pages>.top{position:static;padding:0;margin:0 0 18px;flex:none}
+
+#recheck{min-width:132px;gap:8px;font-weight:600}
+#recheck .settings-icon{display:inline-flex;color:inherit;line-height:1}
+#recheck svg{width:16px;height:16px;flex:none}
+#recheck:disabled{opacity:1;cursor:wait}
+#recheck.is-checking svg{animation:system-check-spin 1s linear infinite}
+@keyframes system-check-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){#recheck.is-checking svg{animation:none}}
+
+.update-actions{align-items:center;flex-wrap:wrap}
+.update-actions .btn{gap:7px;font-weight:600;min-height:34px}
+.update-actions .btn svg{width:16px;height:16px;flex:none;stroke:currentColor;fill:none}
+.update-actions .btn:disabled{cursor:wait}
+.update-actions .btn.is-working svg{animation:system-check-spin 1s linear infinite}
+@media(prefers-reduced-motion:reduce){.update-actions .btn.is-working svg{animation:none}}
+
+.update-actions [hidden]{display:none!important}

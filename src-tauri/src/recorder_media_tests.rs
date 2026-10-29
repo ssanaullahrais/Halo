@@ -35,3 +35,28 @@ fn check_click_parity(fps:u32,style:&str){
 
 #[test]#[ignore="requires local FFmpeg"]fn click_preview_matches_export_at_60_fps(){for style in ["weak","moderate","strong"]{check_click_parity(60,style);}}
 #[test]#[ignore="requires local FFmpeg"]fn click_preview_matches_export_at_30_fps(){for style in ["weak","moderate","strong"]{check_click_parity(30,style);}}
+
+#[test]#[ignore="requires local FFmpeg"]fn arrow_edits_replay_visually_in_export(){
+ use crate::recorder_annotations::{Annotation,CurvePoint,record_frame,asset_on_canvas};
+ let mut job=fixture(30,"moderate");
+ let mut a=Annotation{id:1,kind:"arrow".into(),x:30.,y:80.,w:40.,h:0.,text:String::new(),color:"#FF375F".into(),stroke:3.,font_size:24.,start:0.,end:None,keyframes:vec![],points:vec![]};
+ let mut expected=vec![(0.,a.clone())];record_frame(&mut a,0.);
+ a.w=260.;record_frame(&mut a,0.2);expected.push((0.2,a.clone()));
+ a.points=vec![CurvePoint{x:160.,y:180.}];record_frame(&mut a,0.4);expected.push((0.4,a.clone()));
+ a.points[0].y=220.;record_frame(&mut a,0.6);expected.push((0.6,a.clone()));
+ a.color="#00FF00".into();a.stroke=6.;record_frame(&mut a,0.8);expected.push((0.8,a.clone()));
+ a.points.clear();record_frame(&mut a,0.95);expected.push((0.95,a.clone()));
+ a.end=Some(1.05);job.annotations.push(a);finish(&job).unwrap();
+ let mut decoder=ffmpeg();decoder.arg("-i").arg(&job.output).args(["-pix_fmt","rgb24","-f","rawvideo","pipe:1"]);let decoded=decoder.output().unwrap();assert!(decoded.status.success());let bytes=384*256*3;
+ let mut checked=0;
+ for tick in [3usize,9,15,21,27,30,34]{
+  let t=tick as f64/30.;let actual=&decoded.stdout[tick*bytes..(tick+1)*bytes];
+  if t>=1.05{assert!(actual.iter().all(|v|*v<75),"cleared arrow remains in export at {t}");continue;}
+  let shape=&expected.iter().rev().find(|(time,_)|*time<=t).unwrap().1;
+  let reference=job.dir.join(format!("expected-{tick}.png"));render_png(&asset_on_canvas(shape,(0,0,384,256)).0,&reference).unwrap();let reference=image::open(reference).unwrap().to_rgba8();
+  let mut error=0f64;let mut count=0;
+  for (i,p)in reference.pixels().enumerate(){if p[3]>180{let alpha=p[3]as f64/255.;for channel in 0..3{let base=[16.,32.,48.][channel];let expected=p[channel]as f64*alpha+base*(1.-alpha);error+=(actual[i*3+channel]as f64-expected).abs();count+=1;}}}
+  assert!(count>100);let mean=error/count as f64;assert!(mean<8.,"arrow appearance was skipped or applied at the wrong time: t={t}, pixel MAE={mean}");checked+=1;
+ }
+ println!("Verified {checked} distinct drawing stages and the clear event in {}",job.output.display());
+}

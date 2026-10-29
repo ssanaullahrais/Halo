@@ -19,30 +19,73 @@ const DOC_GLYPH =
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-let busyTotal = "";
-let timer = null;
-let hovering = false;
-let pinned = false; // once the pointer has been on the card it stays until you close it
-let hideAfter = 0;
+// Every card (one per running/finished operation, or a one-off message) is tracked here by id, so
+// several can be shown stacked at once: starting or dismissing one never touches another. A card
+// without an id of its own (a plain toast) gets a throwaway one so it still gets its own slot.
+let anonCounter = 0;
+const cards = new Map(); // id -> { kind, el, timer, hovering, pinned, busyTotal }
 
-function arm(ms) {
-  clearTimeout(timer);
-  if (!ms) return; // the progress card stays until it is replaced
-  timer = setTimeout(() => !hovering && !pinned && dismiss(), ms);
+function resize() {
+  // Tell the backend how tall the stack actually is so the window hugs its content: a single
+  // card doesn't drag along empty, click-eating space, and several don't get clipped.
+  requestAnimationFrame(() => invoke("resize_notice", { height: Math.ceil(host.getBoundingClientRect().height) || 1 }));
 }
 
-function dismiss() {
-  clearTimeout(timer);
-  host.firstElementChild?.classList.add("leaving");
-  setTimeout(() => invoke("hide_notice"), 180);
+function removeCard(id) {
+  const card = cards.get(id);
+  if (!card) return;
+  clearTimeout(card.timer);
+  cards.delete(id);
+  card.el.classList.add("leaving");
+  setTimeout(() => {
+    card.el.remove();
+    if (cards.size === 0) invoke("hide_notice");
+    resize();
+  }, 180);
+}
+
+function arm(id, ms) {
+  const card = cards.get(id);
+  if (!card) return;
+  clearTimeout(card.timer);
+  if (!ms) return; // the progress card stays until it is replaced
+  card.timer = setTimeout(() => !card.hovering && !card.pinned && removeCard(id), ms);
+}
+
+function cardShell(id) {
+  let card = cards.get(id);
+  if (card) return card;
+  const el = document.createElement("div");
+  el.className = "card";
+  el.dataset.id = id;
+  host.appendChild(el); // newest nearest the corner, like Windows' own stack
+  card = { el, timer: null, hovering: false, pinned: false, busyTotal: "" };
+  cards.set(id, card);
+  el.addEventListener("pointerenter", () => {
+    card.hovering = true;
+    card.pinned = true;
+    clearTimeout(card.timer);
+  });
+  el.addEventListener("pointerleave", () => {
+    card.hovering = false; // pinned cards stay; unpinned ones carry on counting down
+  });
+  return card;
 }
 
 function render(n) {
-  hovering = false;
-  pinned = false;
-  if (n.kind === "done") {
+  const id = n.opId || `anon_${++anonCounter}`;
+  const card = cardShell(id);
+  card.hovering = false;
+  card.pinned = false;
+  const el = card.el;
+  let hideAfter = 0;
+
+  if (n.kind === "dismiss") {
+    removeCard(id);
+    return;
+  } else if (n.kind === "done") {
     const thumb = n.thumb ? `<div class="thumb" style="background-image:url('${n.thumb}')"></div>` : `<div class="thumb glyph-only">${DOC_GLYPH}</div>`;
-    host.innerHTML = `
+    el.innerHTML = `
       <div class="done">
         <div class="badge">${svg("check")}</div>
         <div class="close" id="x">${svg("x")}</div>
@@ -53,50 +96,50 @@ function render(n) {
         <button class="btn" id="share">${svg("link")}Upload & get link</button>
       </div>`;
     const first = n.paths[0];
-    document.getElementById("x").onclick = dismiss;
-    document.getElementById("open").onclick = () => invoke("open_path", { path: first }).then(dismiss, () => dismiss());
-    document.getElementById("show").onclick = () => invoke("reveal_path", { path: first }).then(dismiss);
-    document.getElementById("copy").onclick = async (e) => {
+    el.querySelector("#x").onclick = () => removeCard(id);
+    el.querySelector("#open").onclick = () => invoke("open_path", { path: first }).then(() => removeCard(id), () => removeCard(id));
+    el.querySelector("#show").onclick = () => invoke("reveal_path", { path: first }).then(() => removeCard(id));
+    el.querySelector("#copy").onclick = async (e) => {
       const button = e.currentTarget;
       await invoke("copy_text", { text: n.paths.join("\n") });
       button.lastChild.textContent = "Copied";
-      arm(1200);
+      arm(id, 1200);
     };
-    document.getElementById("share").onclick = async (e) => {
+    el.querySelector("#share").onclick = async (e) => {
       const b = e.currentTarget;
       b.disabled = true;
       b.lastChild.textContent = "Uploading…";
-      clearTimeout(timer);
+      clearTimeout(card.timer);
       try {
         const links = await invoke("share_files", { paths: n.paths });
-        render({ kind: "link", title: "Uploaded!", detail: `${links[0].provider} · ${links[0].expires}`, urls: links.map((l) => l.url), thumb: n.thumb });
+        render({ kind: "link", opId: id, title: "Uploaded!", detail: `${links[0].provider} · ${links[0].expires}`, urls: links.map((l) => l.url), thumb: n.thumb });
       } catch (err) {
-        render({ kind: "toast", tone: "error", text: String(err) });
+        render({ kind: "toast", opId: id, tone: "error", text: String(err) });
       }
     };
     hideAfter = 6000;
   } else if (n.kind === "busy") {
     const thumb = n.thumb ? `<div class="thumb" style="background-image:url('${n.thumb}')"></div>` : `<div class="thumb glyph-only">${DOC_GLYPH}</div>`;
-    host.innerHTML = `
+    el.innerHTML = `
       <div class="busy ${n.indeterminate ? "indeterminate" : ""}">
         <div class="progress-head">
-          ${thumb}<div class="label">${esc(n.title)}<span>Working on your files</span></div>
+          ${thumb}<div class="label">${esc(n.title)}<span title="${esc(n.file || "")}">${esc(n.file || "Working on your files")}</span></div>
           <span id="pct">${n.indeterminate ? "" : "0%"}</span>
         </div>
         <div class="progress-track" role="progressbar" aria-label="${esc(n.title)}" aria-valuemin="0" aria-valuemax="100" ${n.indeterminate ? "" : 'aria-valuenow="0"'}><div class="progress-fill" id="bar"></div></div>
         <div class="progress-footer"><div class="sizes" id="sizes">${esc(n.total || "")}</div>
           <button class="btn pill" id="cancel">Cancel</button></div>
       </div>`;
-    busyTotal = n.total || "";
-    document.getElementById("cancel").onclick = (e) => {
-      invoke("cancel_action");
+    card.busyTotal = n.total || "";
+    el.querySelector("#cancel").onclick = (e) => {
+      invoke("cancel_action", { opId: id });
       e.currentTarget.textContent = "Cancelling…";
       e.currentTarget.disabled = true;
     };
     hideAfter = 0;
   } else if (n.kind === "link") {
     const thumb = n.thumb ? `<div class="thumb" style="background-image:url('${n.thumb}')"></div>` : `<div class="thumb glyph-only">${DOC_GLYPH}</div>`;
-    host.innerHTML = `
+    el.innerHTML = `
       <div class="done">
         <div class="badge">${svg("check")}</div>
         <div class="close" id="x">${svg("x")}</div>
@@ -105,38 +148,38 @@ function render(n) {
         <button class="btn primary" id="copylink">${svg("link")}Copy Link</button>
         <button class="btn" id="openlink">${svg("file")}Open Link</button>
       </div>`;
-    document.getElementById("x").onclick = dismiss;
-    document.getElementById("copylink").onclick = async (e) => {
+    el.querySelector("#x").onclick = () => removeCard(id);
+    el.querySelector("#copylink").onclick = async (e) => {
       const button = e.currentTarget;
       await invoke("copy_text", { text: n.urls.join("\n") });
       button.lastChild.textContent = "Copied";
-      arm(1500);
+      arm(id, 1500);
     };
-    document.getElementById("openlink").onclick = () => invoke("open_path", { path: n.urls[0] }).then(dismiss, () => dismiss());
+    el.querySelector("#openlink").onclick = () => invoke("open_path", { path: n.urls[0] }).then(() => removeCard(id), () => removeCard(id));
     hideAfter = 8000;
   } else if (n.kind === "update") {
-    host.innerHTML = `
+    el.innerHTML = `
       <div class="done">
         <div class="badge info">${svg("info")}</div>
         <div class="close" id="x">${svg("x")}</div>
-        <div class="head"><div style="min-width:0"><h3>Halo ${esc(n.version)} is ready</h3><div class="detail">A new version has been downloaded. Restart to finish updating.</div></div></div>
-        <button class="btn primary" id="restart">${svg("check")}Restart &amp; update</button>
+        <div class="head"><div style="min-width:0"><h3>Halo ${esc(n.version)} is ready</h3><div class="detail">It'll install automatically once nothing's running, or update now.</div></div></div>
+        <button class="btn primary" id="restart">${svg("check")}Restart &amp; update now</button>
         <button class="btn" id="later">Later</button>
       </div>`;
-    document.getElementById("x").onclick = dismiss;
-    document.getElementById("later").onclick = dismiss;
-    document.getElementById("restart").onclick = async (e) => {
+    el.querySelector("#x").onclick = () => removeCard(id);
+    el.querySelector("#later").onclick = () => removeCard(id);
+    el.querySelector("#restart").onclick = async (e) => {
       const button = e.currentTarget;
       button.disabled = true;
       button.lastChild.textContent = "Updating…";
-      clearTimeout(timer);
-      pinned = true;
+      clearTimeout(card.timer);
+      card.pinned = true;
       try {
         await invoke("install_update");
       } catch (err) {
         button.disabled = false;
         button.lastChild.textContent = "Restart & update";
-        const detail = host.querySelector(".detail");
+        const detail = el.querySelector(".detail");
         if (detail) detail.textContent = String(err).includes("Finish your") ? String(err) : "Could not install the update. Try again from Settings.";
       }
     };
@@ -145,41 +188,34 @@ function render(n) {
     // Quick messages use the same card as results: a badge on top, then the message.
     const error = n.tone === "error";
     const info = n.tone === "info";
-    host.innerHTML = `
+    el.innerHTML = `
       <div class="done msg">
         <div class="badge ${error ? "error" : info ? "info" : ""}">${svg(error ? "bang" : info ? "info" : "check")}</div>
         <div class="close" id="x">${svg("x")}</div>
         <h3>${esc(n.text)}</h3>
       </div>`;
-    document.getElementById("x").onclick = dismiss;
+    el.querySelector("#x").onclick = () => removeCard(id);
     hideAfter = n.duration || (error ? 4500 : 2200);
   }
-  arm(hideAfter);
+  arm(id, hideAfter);
+  resize();
 }
-
-// Stays put while the pointer is on it; leaves a moment after the pointer moves away.
-host.addEventListener("pointerenter", () => {
-  hovering = true;
-  pinned = true;
-  clearTimeout(timer);
-});
-host.addEventListener("pointerleave", () => {
-  hovering = false; // pinned cards stay; unpinned ones carry on counting down
-});
 
 listen("halo://notice", ({ payload }) => render(payload));
 
-// Live progress for the notification card.
+// Live progress for the notification card it belongs to.
 listen("halo://progress", ({ payload }) => {
-  const bar = document.getElementById("bar");
-  if (!bar || host.querySelector(".busy.indeterminate")) return;
+  const card = cards.get(payload.opId);
+  if (!card) return;
+  const bar = card.el.querySelector("#bar");
+  if (!bar || card.el.querySelector(".busy.indeterminate")) return;
   const progress = Math.max(0, Math.min(payload.pct, 1));
   bar.style.transform = `scaleX(${progress})`;
   bar.parentElement.setAttribute("aria-valuenow", String(Math.round(progress * 100)));
-  const pct = document.getElementById("pct");
+  const pct = card.el.querySelector("#pct");
   if (pct) pct.textContent = `${Math.round(progress * 100)}%`;
-  const sizes = document.getElementById("sizes");
-  if (sizes && payload.bytes) sizes.textContent = `${busyTotal} → ${fmtBytes(payload.bytes)}`;
+  const sizes = card.el.querySelector("#sizes");
+  if (sizes && payload.bytes) sizes.textContent = `${card.busyTotal} → ${fmtBytes(payload.bytes)}`;
 });
 
 function fmtBytes(n) {

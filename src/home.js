@@ -269,8 +269,36 @@ function renderChecks(list) {
   pill.querySelector("b").textContent = words;
   pill.title = words;
 }
-async function refreshChecks() {
-  renderChecks(await invoke("get_requirements"));
+let requirementsRequest = null;
+function refreshChecks() {
+  if (requirementsRequest) return requirementsRequest;
+  const button = $("recheck"), label = $("recheckLabel");
+  button.disabled = true;
+  button.classList.add("is-checking");
+  button.setAttribute("aria-busy", "true");
+  label.textContent = "Checking…";
+  $("systemSummary").textContent = "Checking your system…";
+  $("systemSummaryDetail").textContent = "Checking the components Halo uses.";
+  requirementsRequest = (async () => {
+    try {
+      const checks = await invoke("get_requirements");
+      if (!Array.isArray(checks) || !checks.length) throw new Error("No system check results were returned.");
+      renderChecks(checks);
+      const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      $("systemSummaryDetail").textContent += ` Last checked at ${time}.`;
+    } catch (err) {
+      $("systemSummary").textContent = "Could not check your system.";
+      $("systemSummaryDetail").textContent = "Click Check again to retry.";
+      say(String(err), true);
+    } finally {
+      button.disabled = false;
+      button.classList.remove("is-checking");
+      button.removeAttribute("aria-busy");
+      label.textContent = "Check again";
+      requirementsRequest = null;
+    }
+  })();
+  return requirementsRequest;
 }
 $("checks").addEventListener("click", async (e) => {
   const b = e.target.closest("button[data-fix]");

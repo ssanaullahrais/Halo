@@ -25,6 +25,9 @@ pub struct Req {
     pub text: Option<String>,
     #[serde(default)]
     pub preset: Option<crate::presets::Preset>,
+    /// Identifies this operation so several can run at once without one's cancel/progress affecting another.
+    #[serde(default)]
+    pub op_id: String,
 }
 
 #[derive(Serialize, Clone)]

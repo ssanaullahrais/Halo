@@ -4,7 +4,7 @@ use base64::Engine;
 use serde::{Deserialize,Serialize};
 use tauri::{Emitter,Manager,PhysicalPosition,PhysicalSize};
 use windows::core::BOOL;
-use windows::Win32::{Foundation::{HWND,POINT,RECT},Graphics::Gdi::{MonitorFromPoint,MONITOR_DEFAULTTONEAREST,ClientToScreen},Storage::Xps::{PrintWindow,PRINT_WINDOW_FLAGS},System::Threading::{GetCurrentProcessId,GetCurrentThreadId,AttachThreadInput},UI::{Input::KeyboardAndMouse::GetAsyncKeyState,WindowsAndMessaging::*}};
+use windows::Win32::{Foundation::{HWND,POINT,RECT},Graphics::Gdi::{MonitorFromPoint,MONITOR_DEFAULTTONEAREST,ClientToScreen},Storage::Xps::{PrintWindow,PRINT_WINDOW_FLAGS},System::Threading::{GetCurrentProcessId,GetCurrentThreadId,AttachThreadInput},UI::{Input::KeyboardAndMouse::{GetAsyncKeyState,SendInput,INPUT,INPUT_0,INPUT_MOUSE,MOUSEINPUT,MOUSEEVENTF_WHEEL},WindowsAndMessaging::*}};
 use crate::recorder_audio::AudioTrack;
 const HIDDEN:u32=0x0800_0000;
 const CLICK_SLOTS:usize=4;
@@ -91,7 +91,12 @@ unsafe extern "system" fn enum_window(h:HWND,param:windows::Win32::Foundation::L
  let mut text=[0u16;512];let n=unsafe{GetWindowTextW(h,&mut text)};if n>0 {if let Ok(r)=window_rect(h.0 as u64){if r.w>1&&r.h>1{list.push(Window{id:h.0 as u64,name:String::from_utf16_lossy(&text[..n as usize]),w:r.w,h:r.h,minimized:unsafe{IsIconic(h)}.as_bool()});}}}BOOL(1)
 }
 fn exclude(window:&tauri::WebviewWindow){if let Ok(hwnd)=window.hwnd(){unsafe{let _=SetWindowDisplayAffinity(HWND(hwnd.0),WDA_EXCLUDEFROMCAPTURE);}}}
-pub fn open(app:&tauri::AppHandle){let app=app.clone();thread::spawn(move||{let _=countdown_window(&app);if let Some(w)=app.get_webview_window("recorder"){let _=w.show();let _=w.set_focus();let _=app.emit_to("recorder","halo://recorder-opened",());return;}if let Ok(w)=tauri::WebviewWindowBuilder::new(&app,"recorder",tauri::WebviewUrl::App("recorder.html".into())).title("Halo · Screen Recording").inner_size(615.,84.).visible(false).transparent(true).decorations(false).always_on_top(true).skip_taskbar(true).resizable(false).shadow(false).build(){exclude(&w);{let late=w.clone();thread::spawn(move||{thread::sleep(Duration::from_millis(3000));let _=late.show();});}if let Ok(Some(m))=app.primary_monitor(){let scale=m.scale_factor();let p=m.position();let _=w.set_position(PhysicalPosition::new(p.x+(m.size().width as i32-(615.*scale) as i32)/2,p.y+(24.*scale) as i32));}}});}
+static RECORDER_READY:AtomicBool=AtomicBool::new(false);
+#[tauri::command]pub fn recorder_widget_ready(app:tauri::AppHandle)->Res<()> {
+ if let Some(w)=app.get_webview_window("recorder"){w.show().map_err(|e|e.to_string())?;RECORDER_READY.store(true,Ordering::Relaxed);}
+ Ok(())
+}
+pub fn open(app:&tauri::AppHandle){let app=app.clone();thread::spawn(move||{let _=countdown_window(&app);if let Some(w)=app.get_webview_window("recorder"){if RECORDER_READY.load(Ordering::Relaxed){let _=w.show();let _=w.set_focus();}let _=app.emit_to("recorder","halo://recorder-opened",());return;}RECORDER_READY.store(false,Ordering::Relaxed);if let Ok(w)=tauri::WebviewWindowBuilder::new(&app,"recorder",tauri::WebviewUrl::App("recorder.html".into())).title("Halo · Screen Recording").inner_size(615.,84.).visible(false).transparent(true).decorations(false).always_on_top(true).skip_taskbar(true).resizable(false).shadow(false).build(){exclude(&w);if let Ok(Some(m))=app.primary_monitor(){let scale=m.scale_factor();let p=m.position();let _=w.set_position(PhysicalPosition::new(p.x+(m.size().width as i32-(615.*scale) as i32)/2,p.y+(24.*scale) as i32));}}});}
 #[tauri::command]pub async fn open_recorder(app:tauri::AppHandle){open(&app);}
 #[tauri::command]pub async fn recorder_options(app:tauri::AppHandle)->Res<serde_json::Value>{let displays=monitors(&app)?;tauri::async_runtime::spawn_blocking(move||{let mut windows=Vec::<Window>::new();unsafe{let _=EnumWindows(Some(enum_window),windows::Win32::Foundation::LPARAM(&mut windows as *mut _ as isize));}Ok(serde_json::json!({"config":config(),"native_cursor_size":unsafe{GetSystemMetrics(SM_CXCURSOR).clamp(16,96)},"monitors":displays,"windows":windows,"microphones":crate::recorder_audio::devices()}))}).await.map_err(|e|e.to_string())?}
 #[tauri::command]pub async fn recorder_save_config(app:tauri::AppHandle,config:Config)->Res<()> {
@@ -362,7 +367,42 @@ pub fn cancel_countdown(app:&tauri::AppHandle){if let Some(id)=close_countdown(a
 #[tauri::command]pub fn recorder_annotation_data()->Res<serde_json::Value>{let guard=SESSION.lock().unwrap();let job=guard.as_ref().ok_or("No recording is active.")?;Ok(serde_json::json!({"width":job.bounds.w,"height":job.bounds.h,"fps":job.config.fps,"annotations":job.annotations,"elapsed":elapsed(job)}))}
 #[tauri::command]pub fn recorder_annotation_add(mut annotation:crate::recorder_annotations::Annotation)->Res<crate::recorder_annotations::Annotation>{let mut guard=SESSION.lock().unwrap();let job=guard.as_mut().ok_or("No recording is active.")?;if job.annotations.len()>=100{return Err("This recording already contains 100 annotations.".into());}crate::recorder_annotations::validate(&annotation,job.bounds.w,job.bounds.h)?;annotation.id=job.annotations.len()as u64+1;annotation.start=elapsed(job);annotation.end=None;annotation.keyframes=vec![annotation.frame(annotation.start)];job.annotations.push(annotation.clone());Ok(annotation)}
 #[tauri::command]pub fn recorder_annotation_end(id:Option<u64>)->Res<()> {let mut guard=SESSION.lock().unwrap();let job=guard.as_mut().ok_or("No recording is active.")?;let time=elapsed(job);for annotation in &mut job.annotations{if annotation.end.is_none()&&id.map(|id|id==annotation.id).unwrap_or(true){annotation.end=Some(time);}}Ok(())}
-#[tauri::command]pub async fn recorder_annotations_edit(app:tauri::AppHandle,editing:bool)->Res<()> {if let Some(w)=app.get_webview_window("recorder-annotations"){w.set_ignore_cursor_events(!editing).map_err(|e|e.to_string())?;let _=app.emit("halo://annotation-editing",editing);if editing{let _=w.show();let _=w.set_focus();}return Ok(());}if !editing{return Ok(());}let r={let guard=SESSION.lock().unwrap();let job=guard.as_ref().ok_or("No recording is active.")?;if job.target.mode=="window"{window_rect(job.target.window)?}else{job.bounds}};let w=tauri::WebviewWindowBuilder::new(&app,"recorder-annotations",tauri::WebviewUrl::App("recorder-annotations.html".into())).title("Halo · Recording annotations").decorations(false).transparent(true).always_on_top(false).skip_taskbar(true).resizable(false).shadow(false).build().map_err(|e|e.to_string())?;w.set_size(PhysicalSize::new(r.w,r.h)).map_err(|e|e.to_string())?;w.set_position(PhysicalPosition::new(r.x,r.y)).map_err(|e|e.to_string())?;exclude(&w);let _=w.set_focus();let handle=app.clone();thread::spawn(move||{loop{thread::sleep(Duration::from_millis(150));let Some(window)=handle.get_webview_window("recorder-annotations")else{break};let bounds={let guard=SESSION.lock().unwrap();let Some(job)=guard.as_ref()else{break};if job.target.mode=="window"{window_rect(job.target.window).ok()}else{None}};if let Some(bounds)=bounds{if window.outer_position().ok()!=Some(PhysicalPosition::new(bounds.x,bounds.y)){let _=window.set_position(PhysicalPosition::new(bounds.x,bounds.y));}}}});Ok(())}
+#[derive(Clone,Deserialize)]pub struct AnnotationHitRegion{x:f64,y:f64,w:f64,h:f64}
+#[derive(Default)]struct AnnotationInput{editing:bool,cursor:bool,regions:Vec<AnnotationHitRegion>}
+static ANNOTATION_READY:AtomicBool=AtomicBool::new(false);
+static ANNOTATION_FORWARDING:AtomicBool=AtomicBool::new(false);
+static ANNOTATION_WHEEL_LOCK:Mutex<()>=Mutex::new(());
+static ANNOTATION_INPUT:Mutex<AnnotationInput>=Mutex::new(AnnotationInput{editing:false,cursor:true,regions:Vec::new()});
+#[tauri::command]pub fn recorder_annotation_input(cursor:bool,regions:Vec<AnnotationHitRegion>){
+ let mut input=ANNOTATION_INPUT.lock().unwrap();input.cursor=cursor;
+ input.regions=regions.into_iter().filter(|r|[r.x,r.y,r.w,r.h].iter().all(|v|v.is_finite())&&r.w>0.&&r.h>0.).take(65536).collect();
+}
+fn annotation_ignores_pointer(input:&AnnotationInput,x:f64,y:f64,dragging:bool)->bool{
+ !input.editing||(input.cursor&&!dragging&&!input.regions.iter().any(|r|x>=r.x&&x<=r.x+r.w&&y>=r.y&&y<=r.y+r.h))
+}
+#[tauri::command]pub fn recorder_annotation_ready(app:tauri::AppHandle)->Res<()> {
+ ANNOTATION_READY.store(true,Ordering::Relaxed);
+ let editing=ANNOTATION_INPUT.lock().unwrap().editing;
+ if editing&&SESSION.lock().unwrap().is_some(){if let Some(w)=app.get_webview_window("recorder-annotations"){w.show().map_err(|e|e.to_string())?;}}
+ Ok(())
+}
+#[tauri::command]pub async fn recorder_annotations_edit(app:tauri::AppHandle,editing:bool)->Res<()> {
+ {let mut input=ANNOTATION_INPUT.lock().unwrap();input.editing=editing;if editing{input.cursor=true;}}
+if let Some(w)=app.get_webview_window("recorder-annotations"){w.set_ignore_cursor_events(!editing).map_err(|e|e.to_string())?;let _=app.emit("halo://annotation-editing",editing);if editing&&ANNOTATION_READY.load(Ordering::Relaxed){let _=w.show();let _=w.set_focus();}return Ok(());}if !editing{return Ok(());}let r={let guard=SESSION.lock().unwrap();let job=guard.as_ref().ok_or("No recording is active.")?;if job.target.mode=="window"{window_rect(job.target.window)?}else{job.bounds}};ANNOTATION_READY.store(false,Ordering::Relaxed);let w=tauri::WebviewWindowBuilder::new(&app,"recorder-annotations",tauri::WebviewUrl::App("recorder-annotations.html".into())).title("Halo · Recording annotations").visible(false).decorations(false).transparent(true).always_on_top(true).skip_taskbar(true).resizable(false).shadow(false).build().map_err(|e|e.to_string())?;w.set_size(PhysicalSize::new(r.w,r.h)).map_err(|e|e.to_string())?;w.set_position(PhysicalPosition::new(r.x,r.y)).map_err(|e|e.to_string())?;exclude(&w);let _=w.set_focus();let handle=app.clone();thread::spawn(move||{let mut ignored=None;let mut last_position=Instant::now();loop{
+ thread::sleep(Duration::from_millis(8));let Some(window)=handle.get_webview_window("recorder-annotations")else{break};
+ if let (Ok(origin),Ok(scale))=(window.outer_position(),window.scale_factor()){
+  let mut p=POINT::default();if unsafe{GetCursorPos(&mut p)}.is_ok(){
+   // Keep receiving a gesture that started on a drawing, even outside its old bounds.
+   let down=unsafe{GetAsyncKeyState(0x01)}as u16&0x8000!=0;
+   // The drawing layer stays above the recorded app, but the recorder itself
+   // must still receive Finish/Pencil clicks even while a drawing tool is active.
+   let over_recorder=handle.get_webview_window("recorder").filter(|w|w.is_visible().unwrap_or(false)).and_then(|w|w.outer_position().ok().zip(w.outer_size().ok())).map(|(pos,size)|p.x>=pos.x&&p.y>=pos.y&&p.x<pos.x+size.width as i32&&p.y<pos.y+size.height as i32).unwrap_or(false);
+   let ignore=over_recorder||ANNOTATION_FORWARDING.load(Ordering::Relaxed)||annotation_ignores_pointer(&ANNOTATION_INPUT.lock().unwrap(),(p.x-origin.x)as f64/scale,(p.y-origin.y)as f64/scale,down&&ignored==Some(false));
+   let actual=window.hwnd().ok().map(|h|unsafe{GetWindowLongPtrW(HWND(h.0),GWL_EXSTYLE)}as u32&WS_EX_TRANSPARENT.0!=0);
+   if ignored!=Some(ignore)||actual!=Some(ignore){if window.set_ignore_cursor_events(ignore).is_ok(){ignored=Some(ignore);}}
+  }
+ }
+ if last_position.elapsed()<Duration::from_millis(150){continue;}last_position=Instant::now();let bounds={let guard=SESSION.lock().unwrap();let Some(job)=guard.as_ref()else{break};if job.target.mode=="window"{window_rect(job.target.window).ok()}else{None}};if let Some(bounds)=bounds{if window.outer_position().ok()!=Some(PhysicalPosition::new(bounds.x,bounds.y)){let _=window.set_position(PhysicalPosition::new(bounds.x,bounds.y));}}}});Ok(())}
 #[tauri::command]pub async fn recorder_annotation_snapshot()->Res<String>{let(target,r)={let guard=SESSION.lock().unwrap();let job=guard.as_ref().ok_or("No recording is active.")?;(job.target.clone(),job.bounds)};tauri::async_runtime::spawn_blocking(move||{let dir=crate::system::tools_dir().join("recorder-cache");let path=dir.join(format!("annotation-source-{}.png",chrono::Local::now().timestamp_millis()));let source=if target.mode=="window"{format!("gfxcapture=hwnd={}:capture_cursor=0",target.window)}else{format!("gfxcapture=hmonitor={}:capture_cursor=0",target.monitor)};let mut c=ffmpeg();c.args(["-f","lavfi","-i",&source,"-frames:v","1","-vf"]);let crop=if target.mode=="area"{let area=target.rect.unwrap();format!("hwdownload,format=bgra,crop={}:{}:{}:{}",r.w,r.h,area.x,area.y)}else{"hwdownload,format=bgra".into()};c.arg(crop).arg(&path);run(c)?;Ok(format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(fs::read(path).map_err(|e|e.to_string())?)))}).await.map_err(|e|e.to_string())?}
 #[tauri::command]pub fn recorder_output_info()->Res<serde_json::Value>{let state=recorder_state();let path=state.output.ok_or("No recording has been saved.")?;let metadata=fs::metadata(&path).map_err(|e|e.to_string())?;Ok(serde_json::json!({"path":path,"original_path":state.original_output,"duration":state.elapsed,"bytes":metadata.len()}))}
 #[tauri::command]pub async fn recorder_recycle_output()->Res<()> {let path=recorder_state().output.ok_or("No recording has been saved.")?;tauri::async_runtime::spawn_blocking(move||crate::process::recycle_recording(Path::new(&path))).await.map_err(|e|e.to_string())?}
@@ -370,14 +410,51 @@ pub fn cancel_countdown(app:&tauri::AppHandle){if let Some(id)=close_countdown(a
 fn log_error(message:&str){let dir=crate::system::tools_dir().join("recorder-cache");let _=fs::create_dir_all(&dir);if let Ok(mut file)=fs::OpenOptions::new().create(true).append(true).open(dir.join("diagnostics.log")){let _=writeln!(file,"{} {}",chrono::Local::now().to_rfc3339(),message);}}
 #[tauri::command]pub fn recorder_log_error(message:String){log_error(&message.chars().take(8000).collect::<String>());}
 
+// Drawing mode still owns the canvas. For a wheel over it, wait until Windows
+// has actually applied click-through before injecting input; Tauri's setter queues
+// the change, so sending immediately can deliver the wheel straight back to us.
+#[tauri::command]pub async fn recorder_annotation_forward_wheel(app:tauri::AppHandle,delta:i32)->Res<()> {
+ tauri::async_runtime::spawn_blocking(move||{
+  let _serial=ANNOTATION_WHEEL_LOCK.lock().unwrap();
+  let Some(window)=app.get_webview_window("recorder-annotations")else{return Ok(())};
+  ANNOTATION_FORWARDING.store(true,Ordering::Relaxed);
+  let result=(||{
+   window.set_ignore_cursor_events(true).map_err(|e|e.to_string())?;
+   let hwnd=window.hwnd().map_err(|e|e.to_string())?;let started=Instant::now();
+   while unsafe{GetWindowLongPtrW(HWND(hwnd.0),GWL_EXSTYLE)}as u32&WS_EX_TRANSPARENT.0==0{
+    if started.elapsed()>Duration::from_millis(250){return Err("Could not forward scrolling to the window below.".into());}
+    thread::sleep(Duration::from_millis(1));
+   }
+   let input=INPUT{r#type:INPUT_MOUSE,Anonymous:INPUT_0{mi:MOUSEINPUT{dx:0,dy:0,mouseData:delta as u32,dwFlags:MOUSEEVENTF_WHEEL,time:0,dwExtraInfo:0}}};
+   if unsafe{SendInput(&[input],std::mem::size_of::<INPUT>()as i32)}!=1{return Err("Windows could not forward scrolling.".into());}
+   thread::sleep(Duration::from_millis(20));Ok(())
+  })();
+  ANNOTATION_FORWARDING.store(false,Ordering::Relaxed);
+  // The native pointer worker restores the appropriate mode after dispatch.
+  result
+ }).await.map_err(|e|e.to_string())?
+}
 static ANNOTATION_FLUSH:std::sync::atomic::AtomicU64=std::sync::atomic::AtomicU64::new(0);
 async fn flush_annotations(app:&tauri::AppHandle)->Res<()> {if app.get_webview_window("recorder-annotations").is_none(){return Ok(());}let token=chrono::Local::now().timestamp_millis()as u64;app.emit_to("recorder-annotations","halo://annotation-flush",token).map_err(|e|e.to_string())?;let app=app.clone();tauri::async_runtime::spawn_blocking(move||{let started=Instant::now();while ANNOTATION_FLUSH.load(Ordering::Relaxed)!=token{if app.get_webview_window("recorder-annotations").is_none(){return Ok(());}if started.elapsed()>Duration::from_secs(2){return Err("Could not finish annotations. Please try again.".into());}thread::sleep(Duration::from_millis(10));}Ok(())}).await.map_err(|e|e.to_string())?}
 #[tauri::command]pub fn recorder_annotations_flushed(token:u64){ANNOTATION_FLUSH.store(token,Ordering::Relaxed);}
-#[tauri::command]pub fn recorder_annotation_update(mut annotation:crate::recorder_annotations::Annotation)->Res<()> {let mut guard=SESSION.lock().unwrap();let job=guard.as_mut().ok_or("No recording is active.")?;crate::recorder_annotations::validate(&annotation,job.bounds.w,job.bounds.h)?;let time=elapsed(job);let current=job.annotations.iter_mut().find(|a|a.id==annotation.id&&a.end.is_none()).ok_or("This annotation is no longer active.")?;annotation.start=current.start;annotation.end=None;annotation.keyframes=std::mem::take(&mut current.keyframes);if annotation.keyframes.len()>=3600{annotation.keyframes=annotation.keyframes.into_iter().enumerate().filter_map(|(i,f)|(i%2==0).then_some(f)).collect();}if annotation.keyframes.last().map(|f|f.x!=annotation.x||f.y!=annotation.y||f.w!=annotation.w||f.h!=annotation.h||f.text!=annotation.text).unwrap_or(true){annotation.keyframes.push(annotation.frame(time));}*current=annotation;Ok(())}
+#[tauri::command]pub fn recorder_annotation_update(mut annotation:crate::recorder_annotations::Annotation)->Res<()> {let mut guard=SESSION.lock().unwrap();let job=guard.as_mut().ok_or("No recording is active.")?;crate::recorder_annotations::validate(&annotation,job.bounds.w,job.bounds.h)?;let time=elapsed(job);let current=job.annotations.iter_mut().find(|a|a.id==annotation.id&&a.end.is_none()).ok_or("This annotation is no longer active.")?;annotation.start=current.start;annotation.end=None;annotation.keyframes=std::mem::take(&mut current.keyframes);if annotation.keyframes.len()>=3600{annotation.keyframes=annotation.keyframes.into_iter().enumerate().filter_map(|(i,f)|(i%2==0).then_some(f)).collect();}crate::recorder_annotations::record_frame(&mut annotation,time);*current=annotation;Ok(())}
 
 #[cfg(test)]mod framed_export_tests{use super::*;
  fn render_size(svg:&str)->(u32,u32){let tree=resvg::usvg::Tree::from_str(svg,&resvg::usvg::Options::default()).expect("valid svg");let size=tree.size().to_int_size();(size.width(),size.height())}
  #[test]fn mockup_and_background_match_the_padded_video(){for frame in ["mac","windows"]{for percent in [2u32,8,30]{let mut c=Config::default();c.frame=frame.into();c.frame_padding=percent;let (w,h)=(1920u32,1080u32);let pad=frame_pad(&c,w);assert_eq!(pad%2,0);let expected=(w+2*pad,h+2*pad+40);assert_eq!(render_size(&mockup_svg(&c,w,h)),expected);assert!(background_preset(&c).is_some());assert_eq!(render_size(&background_svg("aurora",expected.0,expected.1)),expected);}}}
  #[test]fn every_preset_has_gradient_stops(){for id in ["aurora","sunset","ocean","forest","midnight","peach","mint","graphite","candy","lavender","lagoon","ember","rose","gold","sky","violet","emerald","coral","dusk","ice","neon","cotton"]{assert!(preset_stops(id).is_some(),"{id}");}}
  #[test]fn default_config_is_valid(){assert!(validate(&Config::default()).is_ok());}
+}
+
+#[cfg(test)]mod annotation_pointer_tests{
+ use super::*;
+ #[test]fn cursor_routes_desktop_input_through_but_keeps_tools_and_drags_interactive(){
+  let mut input=AnnotationInput{editing:true,cursor:true,regions:vec![AnnotationHitRegion{x:100.,y:500.,w:520.,h:72.},AnnotationHitRegion{x:200.,y:100.,w:24.,h:24.}]};
+  assert!(annotation_ignores_pointer(&input,400.,250.,false),"empty desktop must receive scrolling");
+  assert!(!annotation_ignores_pointer(&input,300.,530.,false),"toolbar must remain clickable");
+  assert!(!annotation_ignores_pointer(&input,210.,110.,false),"existing arrows must remain selectable");
+  assert!(!annotation_ignores_pointer(&input,400.,250.,true),"dragging outside the starting bounds must not drop the gesture");
+  input.cursor=false;assert!(!annotation_ignores_pointer(&input,400.,250.,false),"drawing tools need the canvas");
+  input.editing=false;assert!(annotation_ignores_pointer(&input,300.,530.,true),"closing the widget releases all input");
+ }
 }

@@ -762,15 +762,20 @@ function clickVerb(verb) {
 const BUSY_TEXT = { compress: "Compressing…", convert: "Converting…", preset: "Converting…", resize: "Resizing…", share: "Uploading…", qr: "Making QR…" };
 
 // Results appear as a bottom-right notification, so they survive the wheel closing or being clicked away.
+// Several can run at once: each gets its own id, so one finishing (or being dismissed) never touches another.
+let opCounter = 0;
+const newOpId = () => `op_${Date.now()}_${++opCounter}`;
+
 function notify(notice) {
   const thumb = S.info?.data || null; // read before closing, which clears it
   invoke("show_notice", { notice: { thumb, ...notice } });
   closeWidget();
 }
-function startBusy(verb, indeterminate = false) {
-  notify({ kind: "busy", verb, title: BUSY_TEXT[verb], total: fmtBytes(totalSize()), indeterminate });
+function startBusy(verb, indeterminate = false, opId) {
+  const file = S.files.length === 1 ? S.files[0].name : S.files.length ? `${S.files.length} files` : "";
+  notify({ kind: "busy", opId, verb, title: BUSY_TEXT[verb], file, total: fmtBytes(totalSize()), indeterminate });
 }
-const say = (text, tone = "ok") => notify({ kind: "toast", text, tone });
+const say = (text, tone = "ok", opId) => notify({ kind: "toast", opId, text, tone });
 
 const DONE_TITLE = { compress: "Compression Complete!", convert: "Conversion Complete!", resize: "Resize Complete!", preset: "Conversion Complete!" };
 
@@ -803,55 +808,57 @@ async function perform(verb, option, extra = {}) {
     return say(String(e), "error");
   }
   if (verb === "more" && option === "qr") {
-    startBusy("qr", true);
+    const opId = newOpId();
+    startBusy("qr", true, opId);
     try {
       const r = await invoke("make_qr", { path: paths[0] });
-      return notify({ kind: "done", title: "QR code ready", detail: r.note, paths: [r.out_path] });
+      return notify({ kind: "done", opId, title: "QR code ready", detail: r.note, paths: [r.out_path] });
     } catch (e) {
-      return say(String(e), "error");
+      return say(String(e), "error", opId);
     }
   }
   if (verb === "share") {
-    startBusy("share", true); // an upload can't report real progress, so the ring just spins
+    const opId = newOpId();
+    startBusy("share", true, opId); // an upload can't report real progress, so the ring just spins
     try {
       const links = await invoke("share_files", { paths });
-      return notify({ kind: "link", title: "Uploaded!", detail: `${links[0].provider} · ${links[0].expires}`, urls: links.map((l) => l.url) });
+      return notify({ kind: "link", opId, title: "Uploaded!", detail: `${links[0].provider} · ${links[0].expires}`, urls: links.map((l) => l.url) });
     } catch (e) {
-      return say(String(e), "error");
+      return say(String(e), "error", opId);
     }
   }
   const media = ["compress", "convert", "resize", "preset"].includes(verb);
-  const req = { files: paths, verb, option, value: extra.value ?? null, value2: extra.value2 ?? null, text: extra.text ?? null };
+  const opId = media ? newOpId() : null;
+  const req = { files: paths, verb, option, value: extra.value ?? null, value2: extra.value2 ?? null, text: extra.text ?? null, op_id: opId || "" };
   const pending = media ? { verb, option, value: extra.value, value2: extra.value2, label: extra.label } : null;
-  if (media) startBusy(verb); // progress shows bottom-right, with the results
+  if (media) startBusy(verb, false, opId); // progress shows bottom-right, with the results
   else if (option !== "move_to") closeWidget(); // quick actions get out of the way; the result shows bottom-right
 
   let outcomes;
   try {
     outcomes = await invoke("run_action", { req });
-    finish(verb, option, outcomes, { files, thumb, pending });
+    finish(verb, option, outcomes, { files, thumb, pending, opId });
   } catch (e) {
-    return say(String(e), "error");
+    return say(String(e), "error", opId);
   }
 }
 
 const SILENT = new Set(["open_with", "properties", "show_new_window"]); // they open a window of their own
 
-function finish(verb, option, outcomes, { files, thumb, pending }) {
+function finish(verb, option, outcomes, { files, thumb, pending, opId }) {
   const failed = outcomes.find((o) => !o.ok);
   if (failed) {
     if (failed.message === "Cancelled") {
-      invoke("hide_notice");
-      return closeWidget();
+      return notify({ kind: "dismiss", opId });
     }
-    return say(failed.message, "error");
+    return say(failed.message, "error", opId);
   }
   const media = ["compress", "convert", "resize", "preset"].includes(verb);
   if (!media) return SILENT.has(option) ? closeWidget() : say(outcomes[0]?.message || "Done.");
   if (pending) saveLast(pending);
 
   const made = outcomes.filter((o) => o.out_path);
-  if (!made.length) return say(outcomes[0]?.message || "Nothing to do.", "info");
+  if (!made.length) return say(outcomes[0]?.message || "Nothing to do.", "info", opId);
   const before = outcomes.reduce((n, o) => n + o.before, 0);
   const after = outcomes.reduce((n, o) => n + o.after, 0);
   let detail;
@@ -861,7 +868,7 @@ function finish(verb, option, outcomes, { files, thumb, pending }) {
   if (files.length === 1 && files[0].kind === "folder" && !(verb === "compress" && after < before)) detail = outcomes[0].name;
   const note = outcomes.find((o) => o.out_path && o.message)?.message; // e.g. "Couldn't get it smaller ..."
   if (note) detail = note;
-  notify({ kind: "done", title: note ? "Saved a copy" : DONE_TITLE[verb], detail, paths: made.map((m) => m.out_path), thumb });
+  notify({ kind: "done", opId, title: note ? "Saved a copy" : DONE_TITLE[verb], detail, paths: made.map((m) => m.out_path), thumb });
 }
 /* ------------------------------------------------------------------ busy / done / toast */
 const RING = 2 * Math.PI * 114;

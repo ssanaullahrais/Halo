@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.2 — 2026-10-29
+
+- Run multiple file operations at once, with independent progress cards, cancellation, and a live Running submenu in the tray.
+- Recording annotations now replay arrow growth, bends, movement, colour, and thickness changes at their recorded times instead of reusing the final shape.
+- Cursor mode allows scrolling through empty space; drawing tools block scrolling. Selecting Cursor clears current drawings while preserving what was already recorded.
+- Keep the drawing overlay visible when text editing ends or the underlying app gains focus, while retaining access to the recorder controls.
+- Drawing starts off for each recording, with a pencil toggle that resets correctly and ignores overlapping clicks.
+- Drawing and recorder windows wait for their styles, fonts, and measured layout before appearing, matching the countdown overlay.
+- Remove the simulated drawing toolbar from exported videos and its recording setting.
+- Check, download, and install updates automatically when Halo is idle, retry failures in the background, and show a single Update & restart action when an update is ready.
+- Improve System check feedback with a clear loading state, refresh icon, completion time, and retry feedback.
+
 ## 0.3.1 — 2026-10-30
 
 - **Framed recordings** (macOS or Windows window frame): a settings card with picture previews of each frame, a carousel of 22 gradient backgrounds, and a **Mockup size** slider that previews the real margin. The first background is selected for you.

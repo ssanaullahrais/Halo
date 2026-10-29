@@ -17,6 +17,7 @@ mod share;
 mod system;
 mod updates;
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
@@ -24,8 +25,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::menu::{IsMenuItem, Menu, MenuItem, Submenu};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState, Shortcut};
@@ -115,12 +116,23 @@ const SLOP: i32 = 8;
 /// A held touchpad press drifts more than a mouse button does, so a hold tolerates a wider wobble.
 const HOLD_SLOP: i32 = 24;
 
+/// One in-flight compress/convert/resize job. Each gets its own cancel flag and PID so operations
+/// running at the same time can't cancel or clobber one another.
+pub struct OpEntry {
+    cancel: AtomicBool,
+    pid: Mutex<Option<u32>>,
+    label: String,
+    /// The last notice payload shown for this job, so the tray can bring it back after it's dismissed.
+    last_notice: Mutex<Option<serde_json::Value>>,
+}
+
 pub struct Shared {
     visible: AtomicBool,
     rect: Mutex<(i32, i32, i32, i32)>,
     selector: Mutex<Option<selection::Selector>>,
-    cancel: AtomicBool,
-    pid: Mutex<Option<u32>>,
+    /// Every operation currently running, keyed by the id the frontend made up for it.
+    operations: Mutex<HashMap<String, Arc<OpEntry>>>,
+    tray: Mutex<Option<TrayIcon<tauri::Wry>>>,
     hold_ms: AtomicU64,
     shortcut: Mutex<String>,
     /// "wheel" or "menu": how the widget looks when a file is held.
@@ -407,6 +419,64 @@ async fn thumbnail(path: String) -> Option<process::Thumb> {
     tauri::async_runtime::spawn_blocking(move || process::thumbnail(&path)).await.ok().flatten()
 }
 
+fn op_label(req: &process::Req) -> String {
+    let verb = match req.verb.as_str() {
+        "compress" => "Compressing",
+        "convert" => "Converting",
+        "resize" => "Resizing",
+        "preset" => "Converting",
+        other => other,
+    };
+    match req.files.as_slice() {
+        [one] => format!("{verb} {}", Path::new(one).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()),
+        many => format!("{verb} ({} files)", many.len()),
+    }
+}
+
+fn cancel_op(shared: &Arc<Shared>, op_id: &str) {
+    let entry = shared.operations.lock().unwrap().get(op_id).cloned();
+    let Some(entry) = entry else { return };
+    entry.cancel.store(true, Ordering::SeqCst);
+    let pid = *entry.pid.lock().unwrap();
+    if let Some(pid) = pid {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags_hidden()
+            .status();
+    }
+}
+
+/// Rebuilds the tray menu's "Running" submenu from whatever operations are currently in flight.
+fn rebuild_tray_menu(app: &AppHandle, shared: &Arc<Shared>) {
+    let guard = shared.tray.lock().unwrap();
+    let Some(tray) = guard.as_ref() else { return };
+    let mut ops: Vec<(String, String)> = shared.operations.lock().unwrap().iter().map(|(id, e)| (id.clone(), e.label.clone())).collect();
+    ops.sort();
+    let (Ok(hint), Ok(record), Ok(open), Ok(settings), Ok(quit)) = (
+        MenuItem::with_id(app, "hint", "Hold a file, or use your shortcut", false, None::<&str>),
+        MenuItem::with_id(app, "record", "Record screen", true, None::<&str>),
+        MenuItem::with_id(app, "open", "Open Halo", true, None::<&str>),
+        MenuItem::with_id(app, "settings", "Settings", true, None::<&str>),
+        MenuItem::with_id(app, "quit", "Quit Halo", true, None::<&str>),
+    ) else { return };
+    let running: Vec<MenuItem<tauri::Wry>> = ops
+        .iter()
+        .filter_map(|(id, label)| MenuItem::with_id(app, format!("show_op:{id}"), format!("⏳ {label}"), true, None::<&str>).ok())
+        .collect();
+    let menu = if running.is_empty() {
+        Menu::with_items(app, &[&open, &record, &settings, &hint, &quit])
+    } else {
+        let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = running.iter().map(|i| i as &dyn IsMenuItem<tauri::Wry>).collect();
+        match Submenu::with_items(app, format!("Running ({})", running.len()), true, &refs) {
+            Ok(sub) => Menu::with_items(app, &[&open, &record, &settings, &sub, &hint, &quit]),
+            Err(_) => Menu::with_items(app, &[&open, &record, &settings, &hint, &quit]),
+        }
+    };
+    if let Ok(menu) = menu {
+        let _ = tray.set_menu(Some(menu));
+    }
+}
+
 #[tauri::command]
 async fn run_action(app: AppHandle, shared: State<'_, Arc<Shared>>, req: process::Req) -> Result<Vec<process::Outcome>, String> {
     let _job=updates::job()?;
@@ -414,32 +484,41 @@ async fn run_action(app: AppHandle, shared: State<'_, Arc<Shared>>, req: process
     if req.option == "move_to" {
         hide_widget_inner(&app, &shared);
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        shared.cancel.store(false, Ordering::SeqCst);
-        let progress_app = app.clone();
-        let report = move |pct: f64, bytes: u64| {
-            let _ = progress_app.emit("halo://progress", serde_json::json!({ "pct": pct, "bytes": bytes }));
-        };
-        let ctx = process::Ctx { cancel: &shared.cancel, pid: &shared.pid, report: &report };
-        let mut outcomes = process::run(&req, &ctx);
-        if shared.save_mode.lock().unwrap().as_str() == "ask" {
-            process::relocate(&mut outcomes);
+    let op_id = req.op_id.clone();
+    let entry = Arc::new(OpEntry { cancel: AtomicBool::new(false), pid: Mutex::new(None), label: op_label(&req), last_notice: Mutex::new(None) });
+    if !op_id.is_empty() {
+        shared.operations.lock().unwrap().insert(op_id.clone(), entry.clone());
+        rebuild_tray_menu(&app, &shared);
+    }
+    let result = tauri::async_runtime::spawn_blocking({
+        let app = app.clone();
+        let shared = shared.clone();
+        let entry = entry.clone();
+        let op_id = op_id.clone();
+        move || {
+            let report = move |pct: f64, bytes: u64| {
+                let _ = app.emit("halo://progress", serde_json::json!({ "opId": op_id, "pct": pct, "bytes": bytes }));
+            };
+            let ctx = process::Ctx { cancel: &entry.cancel, pid: &entry.pid, report: &report };
+            let mut outcomes = process::run(&req, &ctx);
+            if shared.save_mode.lock().unwrap().as_str() == "ask" {
+                process::relocate(&mut outcomes);
+            }
+            outcomes
         }
-        outcomes
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string());
+    if !op_id.is_empty() {
+        shared.operations.lock().unwrap().remove(&op_id);
+        rebuild_tray_menu(&app, &shared);
+    }
+    result
 }
 
 #[tauri::command]
-fn cancel_action(shared: State<'_, Arc<Shared>>) {
-    shared.cancel.store(true, Ordering::SeqCst);
-    if let Some(pid) = *shared.pid.lock().unwrap() {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .creation_flags_hidden()
-            .status();
-    }
+fn cancel_action(shared: State<'_, Arc<Shared>>, op_id: String) {
+    cancel_op(shared.inner(), &op_id);
 }
 
 #[tauri::command]
@@ -593,18 +672,10 @@ fn ensure_notice(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         .ok()
 }
 
-#[tauri::command]
-fn show_notice(app: AppHandle, notice: serde_json::Value) {
-    {
-        let shared = app.state::<Arc<Shared>>();
-        let quiet = !shared.notifications.load(Ordering::Relaxed);
-        let kind = notice["kind"].as_str().unwrap_or("");
-        let is_error = notice["tone"] == "error";
-        if quiet && !is_error && kind != "link" && kind != "update" {
-            return;
-        }
-    }
-    let Some(win) = ensure_notice(&app) else { return };
+/// Shows (or re-shows) the notice window at the bottom-right of whichever monitor the cursor is on,
+/// sized to fit however many cards are currently stacked in it.
+fn present_notice(app: &AppHandle, notice: serde_json::Value) {
+    let Some(win) = ensure_notice(app) else { return };
     let (x, y) = cursor();
     let monitors = app.available_monitors().unwrap_or_default();
     let Some(mon) = monitors
@@ -617,19 +688,65 @@ fn show_notice(app: AppHandle, notice: serde_json::Value) {
     else {
         return;
     };
-    // Bottom-right of the work area, so it sits just above the taskbar like a Windows notification.
     let scale = mon.scale_factor();
     let area = mon.work_area();
-    let (logical_w, logical_h) = if notice["kind"] != "toast" { (290.0, 330.0) } else { (290.0, 180.0) };
+    // The window starts tall enough for a couple of stacked cards; the frontend asks to resize
+    // it with resize_notice once it knows how much content it actually has to show.
+    let (logical_w, logical_h) = (300.0, 220.0);
     let (w, h) = ((logical_w * scale) as i32, (logical_h * scale) as i32);
-    let margin = (0.0 * scale) as i32;
-    let nx = area.position.x + area.size.width as i32 - w - margin;
-    let ny = area.position.y + area.size.height as i32 - h - margin;
+    let nx = area.position.x + area.size.width as i32 - w;
+    let ny = area.position.y + area.size.height as i32 - h;
     let _ = win.set_size(PhysicalSize::new(w as u32, h as u32));
     let _ = win.set_position(PhysicalPosition::new(nx, ny));
     let _ = win.emit("halo://notice", notice);
     std::thread::sleep(Duration::from_millis(30));
     let _ = win.show();
+}
+
+#[tauri::command]
+fn show_notice(app: AppHandle, notice: serde_json::Value) {
+    {
+        let shared = app.state::<Arc<Shared>>();
+        let quiet = !shared.notifications.load(Ordering::Relaxed);
+        let kind = notice["kind"].as_str().unwrap_or("");
+        let is_error = notice["tone"] == "error";
+        if quiet && !is_error && kind != "link" && kind != "update" {
+            return;
+        }
+        if let Some(op_id) = notice["opId"].as_str() {
+            if let Some(entry) = shared.operations.lock().unwrap().get(op_id) {
+                *entry.last_notice.lock().unwrap() = Some(notice.clone());
+            }
+        }
+    }
+    present_notice(&app, notice);
+}
+
+/// The frontend calls this after re-rendering its stack of cards, so the window always matches
+/// its actual content instead of either clipping cards or leaving dead, click-eating space.
+#[tauri::command]
+fn resize_notice(app: AppHandle, height: f64) {
+    let Some(win) = app.get_webview_window("notice") else { return };
+    let (x, y) = cursor();
+    let monitors = app.available_monitors().unwrap_or_default();
+    let Some(mon) = monitors
+        .iter()
+        .find(|m| {
+            let (p, s) = (m.position(), m.size());
+            x >= p.x && x < p.x + s.width as i32 && y >= p.y && y < p.y + s.height as i32
+        })
+        .or(monitors.first())
+    else {
+        return;
+    };
+    let scale = mon.scale_factor();
+    let area = mon.work_area();
+    let logical_h = height.clamp(80.0, 640.0);
+    let (w, h) = ((300.0 * scale) as i32, (logical_h * scale) as i32);
+    let nx = area.position.x + area.size.width as i32 - w;
+    let ny = area.position.y + area.size.height as i32 - h;
+    let _ = win.set_size(PhysicalSize::new(w as u32, h as u32));
+    let _ = win.set_position(PhysicalPosition::new(nx, ny));
 }
 
 #[tauri::command]
@@ -1054,11 +1171,11 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             updates::update_status, updates::check_updates, updates::install_update,
             set_hit_regions, fit_widget,
-            recorder::recorder_debug_preview, recorder::recorder_test_scene, recorder::open_recorder,
+            recorder::recorder_widget_ready,recorder::recorder_debug_preview, recorder::recorder_test_scene, recorder::open_recorder,
             recorder::recorder_options,
             recorder::recorder_save_config,
             recorder::recorder_pick_folder,
-            recorder::recorder_annotation_update,recorder::recorder_annotations_flushed,recorder::recorder_log_error,recorder::recorder_countdown_open,recorder::recorder_countdown_data,recorder::recorder_countdown_ready,recorder::recorder_close_countdown,recorder::recorder_cancel_countdown,recorder::recorder_window_thumbnail,recorder::recorder_annotation_data,recorder::recorder_annotation_add,recorder::recorder_annotation_end,recorder::recorder_annotations_edit,recorder::recorder_annotation_snapshot,recorder::recorder_output_info,recorder::recorder_recycle_output,recorder::recorder_click_preview, recorder::recorder_cursor_preview, recorder::recorder_toggle_audio, recorder::recorder_preview_start, recorder::recorder_preview_stop, recorder::recorder_state,
+            recorder::recorder_annotation_update,recorder::recorder_annotations_flushed,recorder::recorder_log_error,recorder::recorder_countdown_open,recorder::recorder_countdown_data,recorder::recorder_countdown_ready,recorder::recorder_close_countdown,recorder::recorder_cancel_countdown,recorder::recorder_window_thumbnail,recorder::recorder_annotation_ready,recorder::recorder_annotation_input,recorder::recorder_annotation_data,recorder::recorder_annotation_add,recorder::recorder_annotation_end,recorder::recorder_annotations_edit,recorder::recorder_annotation_snapshot,recorder::recorder_annotation_forward_wheel,recorder::recorder_output_info,recorder::recorder_recycle_output,recorder::recorder_click_preview, recorder::recorder_cursor_preview, recorder::recorder_toggle_audio, recorder::recorder_preview_start, recorder::recorder_preview_stop, recorder::recorder_state,
             recorder::recorder_select_area,recorder::recorder_default_config,
             recorder::recorder_selection_data,
             recorder::recorder_cancel, recorder::recorder_cancel_area, recorder::recorder_commit_area,
@@ -1082,6 +1199,7 @@ fn main() {
             quit_app,
             show_notice,
             hide_notice,
+            resize_notice,
             list_providers,
             file_infos,
             open_settings,
@@ -1103,8 +1221,8 @@ fn main() {
                 visible: AtomicBool::new(false),
                 rect: Mutex::new((0, 0, 0, 0)),
                 selector: Mutex::new(None),
-                cancel: AtomicBool::new(false),
-                pid: Mutex::new(None),
+                operations: Mutex::new(HashMap::new()),
+                tray: Mutex::new(None),
                 hold_ms: AtomicU64::new(DEFAULT_HOLD_MS),
                 shortcut: Mutex::new(DEFAULT_SHORTCUT.to_string()),
                 style: Mutex::new("wheel".to_string()),
@@ -1189,17 +1307,28 @@ fn main() {
             let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit Halo", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &record, &settings, &hint, &quit])?;
-            TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("Halo: hold any file to open the wheel")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id().as_ref() {
-                    "open" => open_dropzone(app),
-                    "record" => recorder::open(app),
-                    "settings" => open_home(app),
-                    "quit" => quit_app(app.clone()),
-                    _ => {}
+                .on_menu_event(|app, event| {
+                    let id = event.id().as_ref();
+                    if let Some(op_id) = id.strip_prefix("show_op:") {
+                        let shared = app.state::<Arc<Shared>>().inner().clone();
+                        let notice = shared.operations.lock().unwrap().get(op_id).and_then(|e| e.last_notice.lock().unwrap().clone());
+                        if let Some(notice) = notice {
+                            present_notice(app, notice);
+                        }
+                        return;
+                    }
+                    match id {
+                        "open" => open_dropzone(app),
+                        "record" => recorder::open(app),
+                        "settings" => open_home(app),
+                        "quit" => quit_app(app.clone()),
+                        _ => {}
+                    }
                 })
                 .on_tray_icon_event(|tray, event| {
                     if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
@@ -1207,6 +1336,7 @@ fn main() {
                     }
                 })
                 .build(app)?;
+            *shared.tray.lock().unwrap() = Some(tray);
 
             // `HALO_DEMO=<file>` opens the wheel on that file in the middle of the primary screen.
             if let Ok(file) = std::env::var("HALO_DEMO") {
