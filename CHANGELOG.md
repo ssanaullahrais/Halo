@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 — 2026-10-30
+
+- **Framed recordings** (macOS or Windows window frame): a settings card with picture previews of each frame, a carousel of 22 gradient backgrounds, and a **Mockup size** slider that previews the real margin. The first background is selected for you.
+- Framed videos keep your recording's frame rate and start with the screen showing, and are written at much higher quality so text stays sharp.
+- Smoother cursor effects: the pointer is sampled far more often, so the highlight, spotlight, trail and click effects follow the mouse without lag. The macOS-style pointer now matches the real cursor size.
+- The click effect is off by default. A **Reset to defaults** button in Advanced restores every recorder setting except your shortcut.
+- Recorder polish: no flash when the recorder opens, the settings card sits flush under the bar and grows to fit its content, window picker cards show a placeholder while a preview loads, and the "Recording saved" card is tidier.
+- Fixed a scrollbar appearing on the countdown card, and a stray close that could hide the next countdown.
+- The text tool for on-screen drawing is easier to type with.
+
 ## 0.3.0 — 2026-10-29
 
 - Update alert: when a new version has finished downloading while Halo is open, a card appears in the corner with **Restart & update** and **Later**.

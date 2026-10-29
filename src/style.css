@@ -1082,7 +1082,6 @@ output.kb::after {
   pointer-events: none;
 }
 #app.dropzone .wedge[data-verb="record"],#app.dropzone .mi[data-verb="record"]{opacity:1;pointer-events:auto}
-.wedge[data-verb="record"] .glyph{stroke:#fff}
 .drop-hint {
   display: flex;
   flex-direction: column;

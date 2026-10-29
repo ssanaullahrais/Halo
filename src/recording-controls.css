@@ -42,3 +42,107 @@
 
 .rec-field-disabled{opacity:.45}
 .recording-controls select:disabled,.recording-controls input:disabled:not([type=checkbox]){cursor:default}
+
+.rec-frame-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin:6px 0 14px}
+.rec-frame-cards button{display:flex;flex-direction:column;align-items:center;gap:6px;padding:8px 6px 7px;border:1px solid #d6e3f5;border-radius:11px;background:#f6f9ff;color:#33507a;font:500 11px "Inter Variable","Segoe UI",sans-serif;cursor:pointer;transition:border-color .15s,background .15s,box-shadow .15s}
+.rec-frame-cards button svg{width:100%;height:auto;max-width:96px}
+.rec-frame-cards button:hover{border-color:#9fbbea;background:#fff}
+.rec-frame-cards button.active{border-color:#1a77ff;background:#eaf2ff;color:#0b56c9;box-shadow:0 0 0 2px #4a94ff30}
+.rec-bg-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9px 10px;margin:6px 0 14px}
+.rec-bg-card{position:relative;display:flex;flex-direction:column;gap:5px;padding:0;border:0;background:none;cursor:pointer;color:#4a6590;font:500 11px "Inter Variable","Segoe UI",sans-serif;text-align:left}
+.rec-bg-card .swatch{position:relative;display:block;height:46px;border-radius:10px;overflow:hidden;box-shadow:0 0 0 1px #c9d8ef,0 2px 6px #1f426818;transition:transform .14s,box-shadow .14s}
+.rec-bg-card .mini{position:absolute;left:50%;top:50%;width:58%;height:60%;transform:translate(-50%,-50%);border-radius:5px;background:#ffffffeb;box-shadow:0 3px 8px #0a1a4040}
+.rec-bg-card .mini b{position:absolute;top:4px;width:4px;height:4px;border-radius:50%;background:#c3cde0}
+.rec-bg-card .mini b:nth-child(1){left:5px}.rec-bg-card .mini b:nth-child(2){left:11px}.rec-bg-card .mini b:nth-child(3){left:17px}
+.rec-bg-card:hover .swatch{transform:translateY(-1px);box-shadow:0 0 0 1px #9fbbea,0 5px 12px #1f42682a}
+.rec-bg-card.active .swatch{box-shadow:0 0 0 2px #1a77ff,0 4px 12px #1a77ff33}
+.rec-bg-card.active .name{color:#0b56c9;font-weight:600}
+.rec-bg-card.active .swatch:after{content:'';position:absolute;right:5px;bottom:5px;width:14px;height:14px;border-radius:50%;background:#1a77ff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center/10px no-repeat;box-shadow:0 0 0 1.5px #fff}
+.rec-bg-custom input{position:absolute;inset:0 0 18px 0;width:100%;height:calc(100% - 18px);opacity:0;cursor:pointer;padding:0;border:0}
+
+/* Frame illustrations draw their own colours; keep the panel's default icon stroke off them. */
+.rec-frame-cards button svg{stroke:none;stroke-width:0;fill:none}
+.rec-frame-cards button svg *{vector-effect:none}
+/* Background cards keep a fixed size instead of stretching with the panel. */
+.rec-bg-grid{grid-template-columns:repeat(5,64px);justify-content:space-between;gap:10px 8px}
+.rec-bg-card{width:64px}
+.rec-bg-card .swatch{height:42px;border-radius:9px}
+.rec-bg-card .name{font-size:10.5px;text-align:center;line-height:1.2;white-space:nowrap}
+.rec-bg-card .mini{width:62%;height:58%}
+
+/* Backgrounds scroll sideways in a carousel with arrows. */
+.rec-bg-carousel{position:relative;display:flex;align-items:center;gap:6px;margin:6px 0 14px}
+.rec-bg-carousel .rec-bg-grid{display:flex;flex:1;min-width:0;gap:9px;margin:0;padding:3px 2px 4px;overflow-x:auto;scroll-snap-type:x proximity;scrollbar-width:none;justify-content:flex-start}
+.rec-bg-carousel .rec-bg-grid::-webkit-scrollbar{display:none}
+.rec-bg-carousel .rec-bg-card{flex:none;width:72px;scroll-snap-align:start}
+.rec-bg-carousel .rec-bg-card .swatch{height:46px}
+.rec-bg-nav{flex:none;display:grid;place-items:center;width:26px;height:26px;padding:0;border:1px solid #c9d8ef;border-radius:50%;background:#fff;color:#33507a;cursor:pointer;box-shadow:0 2px 6px #1f426818;transition:opacity .15s,background .15s}
+.rec-bg-nav svg{width:14px;height:14px;stroke:currentColor;stroke-width:2.4;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.rec-bg-nav:hover:not(:disabled){background:#eaf2ff;border-color:#9fbbea}
+.rec-bg-nav:disabled{opacity:.35;cursor:default}
+
+/* Carousel, refined: bigger cards, soft edge fades, glass arrows, wheel and drag scrolling. */
+.rec-bg-carousel{margin:2px 0 16px;gap:0}
+.rec-bg-carousel .rec-bg-grid{gap:10px;padding:4px 14px 6px;cursor:grab;scroll-snap-type:x proximity;-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 18px,#000 calc(100% - 18px),transparent 100%);mask-image:linear-gradient(90deg,transparent 0,#000 18px,#000 calc(100% - 18px),transparent 100%);user-select:none}
+.rec-bg-carousel.at-start .rec-bg-grid{-webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 18px),transparent 100%);mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 18px),transparent 100%)}
+.rec-bg-carousel.at-end .rec-bg-grid{-webkit-mask-image:linear-gradient(90deg,transparent 0,#000 18px,#000 100%);mask-image:linear-gradient(90deg,transparent 0,#000 18px,#000 100%)}
+.rec-bg-carousel.at-start.at-end .rec-bg-grid{-webkit-mask-image:none;mask-image:none}
+.rec-bg-carousel .rec-bg-grid.dragging{cursor:grabbing;scroll-snap-type:none;scroll-behavior:auto}
+.rec-bg-carousel .rec-bg-grid.dragging .rec-bg-card{pointer-events:none}
+.rec-bg-carousel .rec-bg-card{width:86px}
+.rec-bg-carousel .rec-bg-card .swatch{height:54px;border-radius:11px}
+.rec-bg-carousel .rec-bg-card .name{font-size:11px;text-align:center}
+.rec-bg-nav{position:absolute;top:21px;z-index:2;width:28px;height:28px;border:1px solid #ffffffd9;background:#ffffffe6;backdrop-filter:blur(6px);box-shadow:0 3px 10px #1f426830}
+.rec-bg-nav.prev{left:0}.rec-bg-nav.next{right:0}
+.rec-bg-nav:disabled{opacity:0;pointer-events:none}
+.rec-bg-nav{width:26px;height:26px;opacity:0;transition:opacity .18s,background .15s}
+.rec-bg-carousel:hover .rec-bg-nav:not(:disabled),.rec-bg-nav:focus-visible{opacity:1}
+.rec-bg-nav.prev{left:2px}.rec-bg-nav.next{right:2px}
+
+.rec-bg-carousel .rec-bg-grid{position:relative}
+.rec-bg-card .swatch{transition:transform .18s cubic-bezier(.2,.8,.2,1),box-shadow .18s}
+.rec-bg-card.active .swatch{transform:scale(1.05);box-shadow:0 0 0 2px #fff,0 0 0 4px #1a77ff,0 8px 18px #1a77ff45}
+.rec-bg-card.active .name{align-self:center;padding:1px 9px;border-radius:99px;background:#1a77ff;color:#fff;font-weight:600}
+.rec-bg-card.active .swatch:after{right:6px;bottom:6px;width:16px;height:16px;background-size:11px}
+.rec-bg-card:not(.active) .swatch{filter:saturate(.92)}
+
+/* Page dots replace the arrows. */
+.rec-bg-nav{display:none!important}
+.rec-bg-carousel{display:block}
+.rec-bg-dots{display:flex;justify-content:center;gap:6px;margin-top:8px}
+.rec-bg-dots .dot{width:6px;height:6px;padding:0;border:0;border-radius:99px;background:#c3d2ea;cursor:pointer;transition:width .2s,background .2s}
+.rec-bg-dots .dot:hover{background:#9fb6dc}
+.rec-bg-dots .dot.active{width:18px;background:#1a77ff}
+
+/* Cards are never cut: no edge mask, room for the selected ring, and snapping that lands on whole cards. */
+.rec-bg-carousel .rec-bg-grid,.rec-bg-carousel.at-start .rec-bg-grid,.rec-bg-carousel.at-end .rec-bg-grid{-webkit-mask-image:none!important;mask-image:none!important}
+.rec-bg-carousel .rec-bg-grid{gap:9px;padding:9px 8px 26px;margin:0 -2px -16px;scroll-snap-type:x mandatory;scroll-padding:0 8px}
+.rec-bg-carousel .rec-bg-card{width:80px;scroll-snap-align:start}
+.rec-bg-carousel .rec-bg-card .swatch{height:52px}
+.rec-bg-carousel .rec-bg-grid.dragging{scroll-snap-type:none}
+.rec-bg-dots{margin-top:0}
+.rec-bg-carousel .rec-bg-card{width:auto;flex:0 0 calc((100% - 27px) / 4)}
+.rec-bg-carousel .rec-bg-grid{padding-right:12px}
+.rec-bg-card.active .swatch:after{top:6px;right:6px;bottom:auto;width:17px;height:17px;border-radius:50%;background:#fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231a77ff' stroke-width='3.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center/11px no-repeat;box-shadow:0 2px 6px #0a1a4a40}
+.rec-bg-carousel .rec-bg-grid{gap:14px;padding-left:10px;padding-right:10px}
+.rec-bg-carousel .rec-bg-card{flex:0 0 calc((100% - 42px) / 4)}
+.rec-bg-carousel .rec-bg-grid{scroll-padding:0 10px}
+
+.rec-bg-carousel .rec-bg-grid{scroll-snap-type:none!important;scroll-behavior:auto!important;overscroll-behavior-x:contain;will-change:scroll-position}
+.rec-bg-carousel .rec-bg-card{scroll-snap-align:none}
+
+/* The frame cards preview the chosen frame on the chosen background, live. */
+.frame-art{display:block;width:100%;max-width:96px;aspect-ratio:96/64;border-radius:9px;overflow:hidden;transition:background .25s}
+.frame-art[data-frame-art=mac],.frame-art[data-frame-art=windows]{background:transparent}
+.rec-frame-cards button .frame-art svg{display:block;width:100%;height:100%;max-width:none}
+
+[data-bg-block] .rec-slider{margin:0 0 12px}
+/* "Space around window" reads like the other rows: same label size, slider on the right. */
+[data-bg-block] .rec-slider{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 0 14px;min-height:28px}
+[data-bg-block] .rec-slider>span{display:block;margin:0;font-size:inherit;color:inherit;font-weight:400;flex:none}
+[data-bg-block] .rec-slider input[type=range]{width:63%;margin:0}
+
+.rec-reset{display:inline-flex;align-items:center;gap:8px;margin-top:4px;padding:7px 12px 7px 10px;border:1px solid #d3e0f3;border-radius:9px;background:#f6f9ff;color:#33507a;font:500 12px "Inter Variable","Segoe UI",sans-serif;cursor:pointer;transition:background .15s,border-color .15s,color .15s}
+.rec-reset svg{width:15px;height:15px;stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:round;stroke-linejoin:round}
+.rec-reset:hover{background:#eaf2ff;border-color:#a9c3ec;color:#1a5fd0}
+.rec-reset.done{background:#eafaf0;border-color:#a8e0bb;color:#17803f}

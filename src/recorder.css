@@ -46,3 +46,44 @@
 /* Saving: the main button steps aside and the progress pill takes its look (same red, size and shape). */
 #finishRecorder.saving{display:flex;align-items:center;justify-content:center;height:47px;width:116px;min-width:116px;padding:0 13px;border-radius:11px;border:1px solid #ff5d69;color:#fff;font-weight:500;background:linear-gradient(90deg,#d81f37 var(--save,0%),#ff3045 var(--save,0%));box-shadow:inset 0 0 8px #ffffff20;opacity:1}
 #finishRecorder.saving span{position:relative}
+
+.recorder-settings:before{left:var(--arrow,420px)!important}
+
+.recorder-settings:before{display:none!important}
+
+.recorder-settings{margin-left:0!important}
+
+/* A mid-tone test area that reads for every pointer colour and effect: white and dark pointers, glows, trails and the spotlight dim. */
+.rec-cursor-preview,.rec-cursor-preview[data-tone]{background:linear-gradient(135deg,#4a6fd1 0%,#7a5bd6 55%,#2f9fb8 100%);border-color:#ffffff40;box-shadow:inset 0 0 0 1px #ffffff1f,inset 0 -30px 50px #0a103033}
+.rec-cursor-preview span{background:#0b1230b8;color:#f2f6ff}
+
+/* A window whose preview isn't ready (still loading, minimized or unavailable) still gets a full card with a placeholder picture. */
+.source-window-card.preview-unavailable{min-height:0;align-content:flex-start;background:#ffffff70}
+.source-window-card.preview-unavailable:before,.source-window-card.preview-loading:before{content:'';display:block;width:100%;height:78px;border-radius:5px;background:#e6eef8 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 36' fill='none' stroke='%239db3d3' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='4' width='40' height='28' rx='4'/%3E%3Cpath d='M4 12h40M10 8h.01M15 8h.01'/%3E%3C/svg%3E") center/34px no-repeat}
+.source-window-card.preview-loading:before{background-color:#e6eef8;animation:preview-pulse 1.3s ease-in-out infinite}
+@keyframes preview-pulse{0%,100%{opacity:1}50%{opacity:.55}}
+.source-window-card.preview-unavailable .source-option-copy small{display:block;font-size:9px;color:#6f86a6}
+.source-window-card.preview-loading .source-option-copy small{display:block;font-size:9px;color:#8aa0bd}
+@media(prefers-reduced-motion:reduce){.source-window-card.preview-loading:before{animation:none}}
+
+/* The settings card is rounded, so its scroller sits inset from the edges; the scrollbar stays inside the corners. */
+.rec-content{margin:12px 7px 12px 0;padding:11px 14px 7px 21px;max-height:516px;scrollbar-width:thin;scrollbar-color:#b6c6de transparent;border-radius:14px}
+.rec-content::-webkit-scrollbar{width:6px}
+.rec-content::-webkit-scrollbar-thumb{background:#b6c6de;border-radius:99px}
+
+/* Saved card: actions line up with the card's left edge; the trash is icon-only at the far right. */
+#recorderResult .saved-recording-actions{padding-left:0;margin-top:12px;gap:8px;justify-content:flex-start;align-items:center}
+#recorderResult .saved-recording-actions #openRecording,#recorderResult .saved-recording-actions #revealRecording{height:34px;padding:0 13px}
+#recorderResult .saved-recording-actions #removeRecording{margin-left:auto;width:34px;height:34px;padding:0;border-radius:9px;color:#d3213f;background:#fff2f4;border:1px solid #f6d0d6}
+#recorderResult .saved-recording-actions #removeRecording:hover{background:#ffe3e8}
+#recorderResult .saved-recording-actions #removeRecording svg{width:16px;height:16px}
+#recorderResult{margin-left:0!important;width:100%!important;box-sizing:border-box}
+
+/* Settings grow to fit their content, so there is no inner scrollbar. */
+.rec-content{max-height:none!important;overflow:visible!important}
+
+/* The source list grows to fit more windows before it needs to scroll; its scrollbar only appears while you hover it. */
+#sourcePicker{max-height:min(440px,62vh);scrollbar-width:none}
+#sourcePicker:hover{scrollbar-width:thin}
+#sourcePicker::-webkit-scrollbar{width:0}
+#sourcePicker:hover::-webkit-scrollbar{width:5px}
