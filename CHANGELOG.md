@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3 — 2026-10-29
+
+- **System check installs work reliably.** FFmpeg now downloads directly into Halo's own folder with a verified checksum, with no winget or admin rights needed (winget remains a fallback).
+- Install buttons show "Installing…" immediately, explain what is happening, and report success or the exact error. Stalled installs now stop with a clear message instead of waiting forever.
+
 ## 0.3.2 — 2026-10-29
 
 - Run multiple file operations at once, with independent progress cards, cancellation, and a live Running submenu in the tray.
