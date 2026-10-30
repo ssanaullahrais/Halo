@@ -34,7 +34,7 @@ impl Control{
 // output frame, sharing one interval across its commands.
 #[cfg(test)]
 fn frame_commands(text:&str,fps:u32)->Res<String>{
- frame_commands_range(text,fps,0.,f64::MAX,&Control::default())
+ frame_commands_range(text,fps,0.,f64::MAX,&Control::background(Arc::new(AtomicBool::new(false))))
 }
 pub(super) fn frame_commands_range(text:&str,fps:u32,start:f64,duration:f64,control:&Control)->Res<String>{
  use std::collections::BTreeMap;
@@ -265,16 +265,16 @@ pub(super) fn save_original(job:&Session,destination:&Path)->Res<()> {
  use super::*;
  #[test]fn background_controls_do_not_share_capture_or_other_job_state(){
   let first=Arc::new(AtomicBool::new(false));let second=Arc::new(AtomicBool::new(false));let a=Control::background(first.clone());let b=Control::background(second);
-  let capture=CANCEL.swap(true,Ordering::Relaxed);assert!(!a.cancelled()&&!b.cancelled());a.set_stage(2);a.encoding(42.);assert_eq!(a.snapshot(),(3,42.));assert_eq!(b.snapshot(),(1,0.));first.store(true,Ordering::Relaxed);assert!(a.cancelled()&&!b.cancelled());CANCEL.store(capture,Ordering::Relaxed);
+  let capture=Control::background(Arc::new(AtomicBool::new(true)));assert!(capture.cancelled());assert!(!a.cancelled()&&!b.cancelled());a.set_stage(2);a.encoding(42.);assert_eq!(a.snapshot(),(3,42.));assert_eq!(b.snapshot(),(1,0.));first.store(true,Ordering::Relaxed);assert!(a.cancelled()&&!b.cancelled());assert!(capture.cancelled());
  }
  #[test]fn parallel_assets_reuse_exact_pixels_and_propagate_failures(){
   let dir=std::env::temp_dir().join(format!("halo-assets-{}",chrono::Local::now().timestamp_nanos_opt().unwrap()));fs::create_dir_all(&dir).unwrap();
   let svg=r##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><circle cx="32" cy="32" r="24" fill="#ff1234" fill-opacity=".37"/></svg>"##;
-  let progress=PreparationProgress{completed:AtomicUsize::new(0),total:3,control:Control::default()};save_stage(1);let mut assets=render::Assets::new();
+  let progress=PreparationProgress{completed:AtomicUsize::new(0),total:3,control:Control::background(Arc::new(AtomicBool::new(false)))};let mut assets=render::Assets::new();
   for i in 0..3{assets.push(svg.into(),dir.join(format!("copy-{i}.png")));}assets.prepare(&progress,3).unwrap();progress.complete();
   let expected=fs::read(dir.join("copy-0.png")).unwrap();for i in 1..3{assert_eq!(fs::read(dir.join(format!("copy-{i}.png"))).unwrap(),expected);}
-  let progress=PreparationProgress{completed:AtomicUsize::new(0),total:2,control:Control::default()};let mut assets=render::Assets::new();assets.push(svg.into(),dir.join("valid.png"));assets.push(svg.into(),dir.join("missing-parent/invalid.png"));assert!(assets.prepare(&progress,2).is_err());
-  let progress=PreparationProgress{completed:AtomicUsize::new(0),total:1,control:Control::default()};let mut assets=render::Assets::new();assets.push(svg.into(),dir.join("cancelled.png"));CANCEL.store(true,Ordering::Relaxed);let cancelled=assets.prepare(&progress,2);CANCEL.store(false,Ordering::Relaxed);assert!(cancelled.unwrap_err().contains("cancelled"));assert!(!dir.join("cancelled.png").exists());
+  let progress=PreparationProgress{completed:AtomicUsize::new(0),total:2,control:Control::background(Arc::new(AtomicBool::new(false)))};let mut assets=render::Assets::new();assets.push(svg.into(),dir.join("valid.png"));assets.push(svg.into(),dir.join("missing-parent/invalid.png"));assert!(assets.prepare(&progress,2).is_err());
+  let progress=PreparationProgress{completed:AtomicUsize::new(0),total:1,control:Control::background(Arc::new(AtomicBool::new(true)))};let mut assets=render::Assets::new();assets.push(svg.into(),dir.join("cancelled.png"));let cancelled=assets.prepare(&progress,2);assert!(cancelled.unwrap_err().contains("cancelled"));assert!(!dir.join("cancelled.png").exists());
   fs::remove_dir_all(dir).unwrap();
  }
  #[test]fn preparation_counts_frame_collisions_and_segment_overlap(){
@@ -302,7 +302,7 @@ pub(super) fn save_original(job:&Session,destination:&Path)->Res<()> {
  }
  #[test]fn cursor_sections_restore_state_and_shift_later_events(){
   let text="0 overlay@pointer x 10;\n0 overlay@pointer y 20;\n0.1 overlay@pointer x 30;\n0.4 overlay@pointer y 40;\n0.6 overlay@pointer x 50;\n0.8 overlay@pointer x 60;\n";
-  let compiled=frame_commands_range(text,30,0.4,0.4,&Control::default()).unwrap();let first=compiled.lines().next().unwrap();assert!(first.contains("overlay@pointer x 30"));assert!(first.contains("overlay@pointer y 40"));
+  let compiled=frame_commands_range(text,30,0.4,0.4,&Control::background(Arc::new(AtomicBool::new(false)))).unwrap();let first=compiled.lines().next().unwrap();assert!(first.contains("overlay@pointer x 30"));assert!(first.contains("overlay@pointer y 40"));
   assert!(compiled.contains("0.199999900 overlay@pointer x 50"));assert!(!compiled.contains("x 60"));
  }
  #[test]fn watchdog_bounds_initialization_stalls_and_total_time(){
