@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.4 — 2026-10-30
+
+- Save the original recording promptly while rendering frames, backgrounds, cursor effects and annotations separately.
+- Speed up styled exports with parallel rendering, frame-based cursor updates and shared image preparation, while preserving output quality.
+- Keep exports running when the recorder closes, record another take, and manage queued or running jobs through the tray Processes menu with progress and cancellation.
+- Show clear Preparing, Exporting and Finalizing stages, detect stalled renderers, and report final completion through the corner alert.
+- Save portable .halo source projects and their assets under source-files, with Export again and project reopening for cancelled or completed exports.
+- Improve original-video previews, export controls, recording countdowns and live microphone/system-audio meters.
+- Automatically install missing supported components at startup, retaining the verified direct FFmpeg download and bounded installer retries.
+- Add an automatic-updates switch in About, enabled by default.
+
 ## 0.3.3 â€” 2026-10-29
 
 - **System check installs work reliably.** FFmpeg now downloads directly into Halo's own folder with a verified checksum, with no winget or admin rights needed (winget remains a fallback).
