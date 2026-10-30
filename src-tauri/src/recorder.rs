@@ -8,6 +8,10 @@ use windows::Win32::{Foundation::{HWND,POINT,RECT},Graphics::Gdi::{MonitorFromPo
 use crate::recorder_audio::AudioTrack;
 const HIDDEN:u32=0x0800_0000;
 const CLICK_SLOTS:usize=4;
+#[path="recorder_export.rs"]mod export;
+#[path="recorder_render.rs"]mod render;
+#[path="recorder_jobs.rs"]mod jobs;
+#[path="recorder_project.rs"]mod project;
 #[cfg(test)]#[path="recorder_media_tests.rs"]mod media_tests;
 type Res<T>=Result<T,String>;
 
@@ -27,35 +31,35 @@ fn validate(c:&Config)->Res<()> {
 #[derive(Clone,Serialize,Deserialize)]pub struct Target {pub mode:String,pub monitor:u64,pub window:u64,pub rect:Option<Rect>}
 #[derive(Clone,Serialize)]pub struct Monitor {pub id:u64,pub name:String,pub x:i32,pub y:i32,pub w:u32,pub h:u32,pub scale:f64}
 #[derive(Serialize)]pub struct Window {pub id:u64,pub name:String,pub w:u32,pub h:u32,pub minimized:bool}
-#[derive(Clone,Serialize,Default)]pub struct State {pub phase:String,pub elapsed:f64,pub output:Option<String>,pub original_output:Option<String>,pub error:Option<String>,pub mic_peak:f32,pub system_peak:f32,pub preview_active:bool,pub save_percent:f64,pub target:Option<Rect>,pub microphone:Option<bool>,pub system_audio:Option<bool>}
+#[derive(Clone,Serialize,Default)]pub struct State {pub phase:String,pub export_id:Option<String>,pub elapsed:f64,pub output:Option<String>,pub original_output:Option<String>,pub project_path:Option<String>,pub error:Option<String>,pub mic_peak:f32,pub system_peak:f32,pub preview_active:bool,pub save_percent:f64,pub save_stage:String,pub target:Option<Rect>,pub microphone:Option<bool>,pub system_audio:Option<bool>}
 static STATE:Mutex<Option<State>>=Mutex::new(None);
 static SESSION:Mutex<Option<Session>>=Mutex::new(None);
 static OP:Mutex<()>=Mutex::new(());
 static CANCEL:AtomicBool=AtomicBool::new(false);
 static SAVE_PROGRESS:AtomicU32=AtomicU32::new(0);
+// 0 original, 1 visual preparation, 2 encoder startup, 3 encoding,
+// 4 container finalization, 5 publishing the completed file.
+static SAVE_STAGE:AtomicU32=AtomicU32::new(0);
+fn save_stage(stage:u32){SAVE_STAGE.store(stage,Ordering::Relaxed);if stage!=2{save_progress(0.);}}
+fn save_stage_name()->&'static str{match SAVE_STAGE.load(Ordering::Relaxed){1|2=>"preparing",3=>"encoding",4|5=>"finalizing",_=>"saving"}}
 fn save_progress(value:f64){SAVE_PROGRESS.store((value.clamp(0.,100.)*100.)as u32,Ordering::Relaxed);}
 static PREVIEW:Mutex<Option<AudioPreview>>=Mutex::new(None);
-struct AudioPreview {stop:Arc<AtomicBool>,tracks:Vec<AudioTrack>,mic:Arc<AtomicU32>,system:Arc<AtomicU32>}
-fn stop_preview(){if let Some(p)=PREVIEW.lock().unwrap().take(){p.stop.store(true,Ordering::Relaxed);for track in p.tracks{let _=track.join.join();}}}
+struct AudioPreview {microphone:bool,system_audio:bool,stop:Arc<AtomicBool>,tracks:Vec<AudioTrack>,mic:Arc<AtomicU32>,system:Arc<AtomicU32>}
+fn stop_preview(){if let Some(p)=PREVIEW.lock().unwrap().take(){p.stop.store(true,Ordering::Relaxed);for track in p.tracks{let _=export::join_audio(track);}}}
 #[tauri::command]pub async fn recorder_preview_stop()->Res<()> {tauri::async_runtime::spawn_blocking(||{let _op=OP.lock().unwrap();stop_preview();}).await.map_err(|e|e.to_string())?;Ok(())}
-#[tauri::command]pub async fn recorder_preview_start(config:Config)->Res<()> {tauri::async_runtime::spawn_blocking(move||{let _op=OP.lock().unwrap();stop_preview();if SESSION.lock().unwrap().is_some(){return Ok(());}let stop=Arc::new(AtomicBool::new(false));let mic=Arc::new(AtomicU32::new(0));let system=Arc::new(AtomicU32::new(0));let mut tracks=vec![];for (enabled,is_mic) in [(config.microphone,true),(config.system_audio,false)]{if enabled{match crate::recorder_audio::meter(is_mic,config.microphone_id.clone(),stop.clone(),if is_mic{mic.clone()}else{system.clone()}){Ok(track)=>tracks.push(track),Err(error)=>{stop.store(true,Ordering::Relaxed);for track in tracks{let _=track.join.join();}return Err(error);}}}}*PREVIEW.lock().unwrap()=Some(AudioPreview{stop,tracks,mic,system});Ok(())}).await.map_err(|e|e.to_string())?}
+#[tauri::command]pub async fn recorder_preview_start(config:Config)->Res<()> {tauri::async_runtime::spawn_blocking(move||{let _op=OP.lock().unwrap();stop_preview();if SESSION.lock().unwrap().is_some(){return Ok(());}let stop=Arc::new(AtomicBool::new(false));let mic=Arc::new(AtomicU32::new(0));let system=Arc::new(AtomicU32::new(0));let mut tracks=vec![];for (enabled,is_mic) in [(config.microphone,true),(config.system_audio,false)]{if enabled{match crate::recorder_audio::meter(is_mic,config.microphone_id.clone(),stop.clone(),if is_mic{mic.clone()}else{system.clone()}){Ok(track)=>tracks.push(track),Err(error)=>{log_error(&format!("Audio preview unavailable: {error}"));}}}}*PREVIEW.lock().unwrap()=Some(AudioPreview{microphone:config.microphone,system_audio:config.system_audio,stop,tracks,mic,system});Ok(())}).await.map_err(|e|e.to_string())?}
 
 static SELECTOR:Mutex<Option<Selection>>=Mutex::new(None);
 struct Selection {monitor:Monitor,data:String}
 struct Running {child:Child,stop:Arc<AtomicBool>,gate:Arc<Mutex<Option<Instant>>>,audio:Vec<AudioTrack>,pointer:Option<thread::JoinHandle<()>>,raw:PathBuf,commands:PathBuf,mic_failed:bool,system_failed:bool}
 struct Segment {raw:PathBuf,audio:Vec<(PathBuf,bool)>,commands:PathBuf,duration:f64}
-struct Session {config:Config,target:Target,bounds:Rect,dir:PathBuf,output:PathBuf,original_output:Option<PathBuf>,segments:Vec<Segment>,running:Option<Running>,gpu:bool,mic_peak:Arc<AtomicU32>,sys_peak:Arc<AtomicU32>,mic_muted:Arc<AtomicBool>,sys_muted:Arc<AtomicBool>,annotations:Vec<crate::recorder_annotations::Annotation>}
+struct Session {config:Config,target:Target,bounds:Rect,dir:PathBuf,output:PathBuf,project:Option<PathBuf>,original_output:Option<PathBuf>,segments:Vec<Segment>,running:Option<Running>,gpu:bool,mic_peak:Arc<AtomicU32>,sys_peak:Arc<AtomicU32>,mic_muted:Arc<AtomicBool>,sys_muted:Arc<AtomicBool>,annotations:Vec<crate::recorder_annotations::Annotation>}
 fn phase(value:&str,error:Option<String>){let mut state=STATE.lock().unwrap();let s=state.get_or_insert_with(State::default);s.phase=value.into();s.error=error;}
-fn ffmpeg()->std::process::Command{let mut c=std::process::Command::new(crate::system::ffmpeg_path());c.args(["-hide_banner","-loglevel","error","-y"]);c.creation_flags(HIDDEN);c}
+fn ffmpeg()->std::process::Command{let mut c=std::process::Command::new(crate::system::ffmpeg_path());c.args(["-hide_banner","-loglevel","error","-y","-protocol_whitelist","file,pipe"]);c.creation_flags(HIDDEN);c}
 fn run(command:std::process::Command)->Res<()> {run_command(command,None,None)}
 fn run_progress(mut command:std::process::Command,duration:f64,from:f64,to:f64)->Res<()> {command.args(["-progress","pipe:1","-stats_period","0.1"]);run_command(command,None,Some((duration.max(0.1),from,to)))}
-fn run_command(mut command:std::process::Command,timeout:Option<Duration>,progress:Option<(f64,f64,f64)>)->Res<()> {
- let started=Instant::now();if CANCEL.load(Ordering::Relaxed){return Err("Recording cancelled.".into());}
- let mut child=command.stdin(Stdio::null()).stdout(if progress.is_some(){Stdio::piped()}else{Stdio::null()}).stderr(Stdio::piped()).creation_flags(HIDDEN).spawn().map_err(|e|e.to_string())?;
- let progress_reader=progress.map(|(duration,from,to)|{let stdout=child.stdout.take().unwrap();thread::spawn(move||{for line in BufReader::new(stdout).lines().map_while(Result::ok){if let Some(value)=line.strip_prefix("out_time_us="){if let Ok(time)=value.parse::<f64>(){save_progress(from+(to-from)*(time/1_000_000./duration).clamp(0.,1.));}}}})});
- let mut stderr=child.stderr.take().unwrap();let reader=thread::spawn(move||{use std::io::Read;let mut bytes=Vec::new();let _=stderr.read_to_end(&mut bytes);bytes});
- let result=loop{if timeout.map(|limit|started.elapsed()>limit).unwrap_or(false){let _=child.kill();let _=child.wait();break Err("The window did not provide a capture frame in time.".into());}if CANCEL.load(Ordering::Relaxed){let _=child.kill();let _=child.wait();break Err("Recording cancelled.".into());}match child.try_wait(){Ok(Some(status))=>break Ok(status),Ok(None)=>thread::sleep(Duration::from_millis(30)),Err(error)=>{let _=child.kill();let _=child.wait();break Err(error.to_string());}}};
- let error=reader.join().unwrap_or_default();if let Some(reader)=progress_reader{let _=reader.join();}let status=result?;if !status.success(){return Err(String::from_utf8_lossy(&error).chars().take(1000).collect());}if let Some((_,_,to))=progress{save_progress(to);}Ok(())
+fn run_command(command:std::process::Command,timeout:Option<Duration>,progress:Option<(f64,f64,f64)>)->Res<()> {
+ export::run_command(command,timeout,progress)
 }
 
 fn escaped(path:&Path)->String {path.to_string_lossy().replace('\\',"/").replace(':',"\\:").replace('\'',"\\'")}
@@ -106,7 +110,7 @@ pub fn open(app:&tauri::AppHandle){let app=app.clone();thread::spawn(move||{let 
 #[tauri::command]pub async fn recorder_pick_folder(app:tauri::AppHandle)->Option<String>{use tauri_plugin_dialog::DialogExt;tauri::async_runtime::spawn_blocking(move||app.dialog().file().blocking_pick_folder().and_then(|p|p.into_path().ok()).map(|p|p.to_string_lossy().into_owned())).await.ok().flatten()}
 #[tauri::command]pub fn recorder_state()->State {
  let mut s=STATE.lock().unwrap().clone().unwrap_or_else(||State{phase:"idle".into(),..Default::default()});
- if let Ok(guard)=SESSION.try_lock(){if let Some(job)=guard.as_ref(){s.elapsed=job.segments.iter().map(|s|s.duration).sum();if let Some(r)=&job.running {if let Some(start)=*r.gate.lock().unwrap(){s.elapsed+=start.elapsed().as_secs_f64();}}s.mic_peak=f32::from_bits(job.mic_peak.load(Ordering::Relaxed));s.system_peak=f32::from_bits(job.sys_peak.load(Ordering::Relaxed));s.microphone=Some(job.config.microphone);s.system_audio=Some(job.config.system_audio);}}if s.phase=="saving"{s.save_percent=SAVE_PROGRESS.load(Ordering::Relaxed)as f64/100.;}if s.phase=="idle"{if let Ok(p)=PREVIEW.try_lock(){if let Some(p)=p.as_ref(){s.mic_peak=f32::from_bits(p.mic.load(Ordering::Relaxed));s.system_peak=f32::from_bits(p.system.load(Ordering::Relaxed));s.preview_active=true;}}}s
+ if let Ok(guard)=SESSION.try_lock(){if let Some(job)=guard.as_ref(){s.elapsed=job.segments.iter().map(|s|s.duration).sum();if let Some(r)=&job.running {if let Some(start)=*r.gate.lock().unwrap(){s.elapsed+=start.elapsed().as_secs_f64();}}s.mic_peak=f32::from_bits(job.mic_peak.load(Ordering::Relaxed));s.system_peak=f32::from_bits(job.sys_peak.load(Ordering::Relaxed));s.microphone=Some(job.config.microphone);s.system_audio=Some(job.config.system_audio);}}if matches!(s.phase.as_str(),"saving"|"exporting"){s.save_percent=SAVE_PROGRESS.load(Ordering::Relaxed)as f64/100.;s.save_stage=save_stage_name().into();}jobs::foreground(&mut s);if matches!(s.phase.as_str(),"idle"|"exporting"){if let Ok(p)=PREVIEW.try_lock(){if let Some(p)=p.as_ref(){s.mic_peak=f32::from_bits(p.mic.load(Ordering::Relaxed));s.system_peak=f32::from_bits(p.system.load(Ordering::Relaxed));s.preview_active=true;s.microphone=if p.microphone{Some(p.tracks.iter().any(|t|t.mic))}else{None};s.system_audio=if p.system_audio{Some(p.tracks.iter().any(|t|!t.mic))}else{None};}}}s
 }
 #[tauri::command]pub async fn recorder_select_area(app:tauri::AppHandle,monitor:u64)->Res<()> {
  let m=monitors(&app)?.into_iter().find(|m|m.id==monitor).ok_or("Choose a display.")?;let request=m.clone();
@@ -133,25 +137,26 @@ pub fn cancel_area(app:&tauri::AppHandle){
 
 
 fn video_settings(command:&mut std::process::Command,c:&Config,gpu:bool){let q=match c.quality.as_str(){"archive"=>12,"balanced"=>23,_=>16};if gpu{command.args(["-c:v","h264_nvenc","-preset","p5","-rc","vbr","-cq",&q.to_string(),"-b:v","0"]);}else{command.args(["-c:v","libx264","-preset","medium","-crf",&q.to_string()]);}command.args(["-pix_fmt","yuv420p"]);}
-// Capture and working segments retain full chroma and avoid cumulative compression.
-// Only the delivery MP4 is encoded with the user's quality/compatibility settings.
+// Lossless synthetic media used by pixel-level export tests.
+#[cfg(test)]
 fn intermediate_video_settings(command:&mut std::process::Command,gpu:bool){
  if gpu{command.args(["-c:v","h264_nvenc","-preset","p1","-tune","lossless","-pix_fmt","yuv444p"]);}else{command.args(["-c:v","libx264rgb","-preset","ultrafast","-crf","0","-pix_fmt","rgb24"]);}
 }
-fn capture_video_settings(command:&mut std::process::Command,gpu:bool){
- intermediate_video_settings(command,gpu);
- // Keep live encoding from queuing old pictures behind the source clock.
- if gpu{command.args(["-zerolatency","1","-delay","0","-bf","0"]);}else{command.args(["-tune","zerolatency"]);}
+fn capture_video_settings(command:&mut std::process::Command,c:&Config,gpu:bool){
+ let q=match c.quality.as_str(){"archive"=>12,"balanced"=>23,_=>16};
+ if gpu{command.args(["-c:v","h264_nvenc","-preset","p1","-rc","vbr","-cq",&q.to_string(),"-b:v","0","-zerolatency","1","-delay","0","-bf","0"]);}
+ else{command.args(["-c:v","libx264","-preset","ultrafast","-tune","zerolatency","-crf",&q.to_string()]);}
+ command.args(["-pix_fmt","yuv420p"]);
 }
-fn gpu_available(dir:&Path,width:u32,height:u32,fps:u32)->bool {let mut c=ffmpeg();c.args(["-f","lavfi","-i",&format!("color=size={}x{}:rate={fps}",(width+1)/2*2,(height+1)/2*2),"-frames:v","1"]);capture_video_settings(&mut c,true);c.arg(dir.join("encoder-probe.mp4"));run(c).is_ok()}
+fn gpu_available(dir:&Path,width:u32,height:u32,fps:u32)->bool {let mut c=ffmpeg();c.args(["-f","lavfi","-i",&format!("color=size={}x{}:rate={fps}",(width+1)/2*2,(height+1)/2*2),"-frames:v","1"]);capture_video_settings(&mut c,&Config::default(),true);c.arg(dir.join("encoder-probe.mp4"));run(c).is_ok()}
 fn start_segment(job:&Session)->Res<Running>{
  if CANCEL.load(Ordering::Relaxed){return Err("Recording cancelled.".into());}
- let i=job.segments.len();let raw=job.dir.join(format!("segment-{i}.mp4"));let commands=job.dir.join(format!("cursor-{i}.txt"));let gate=Arc::new(Mutex::new(None::<Instant>));let stop=Arc::new(AtomicBool::new(false));let mut audio=Vec::new();
+ let i=job.segments.len();let capture=project::assets_dir(job);let raw=capture.join(format!("segment-{i}.mp4"));let commands=job.dir.join(format!("cursor-{i}.txt"));let gate=Arc::new(Mutex::new(None::<Instant>));let stop=Arc::new(AtomicBool::new(false));let mut audio=Vec::new();
  // A failed audio device (disconnected mic, no capture device on this machine, etc.) shouldn't
  // block video recording entirely; skip that one track, keep going without it, and report it so
  // the UI can turn the toggle off instead of showing it as enabled while silently not recording.
  let (mut mic_failed,mut system_failed)=(false,false);
- for (enabled,mic) in [(job.config.microphone,true),(job.config.system_audio,false)] {if enabled {let path=job.dir.join(format!("{}-{i}.wav",if mic{"mic"}else{"system"}));match crate::recorder_audio::start(path,mic,job.config.microphone_id.clone(),stop.clone(),gate.clone(),if mic{job.mic_peak.clone()}else{job.sys_peak.clone()},if mic{job.mic_muted.clone()}else{job.sys_muted.clone()}){Ok(track)=>audio.push(track),Err(e)=>{log_error(&format!("{} capture unavailable, recording without it: {e}",if mic{"Microphone"}else{"System audio"}));if mic{mic_failed=true}else{system_failed=true}}}}}
+ for (enabled,mic) in [(job.config.microphone,true),(job.config.system_audio,false)] {if enabled {let path=capture.join(format!("{}-{i}.wav",if mic{"mic"}else{"system"}));match crate::recorder_audio::start(path,mic,job.config.microphone_id.clone(),stop.clone(),gate.clone(),if mic{job.mic_peak.clone()}else{job.sys_peak.clone()},if mic{job.mic_muted.clone()}else{job.sys_muted.clone()}){Ok(track)=>audio.push(track),Err(e)=>{log_error(&format!("{} capture unavailable, recording without it: {e}",if mic{"Microphone"}else{"System audio"}));if mic{mic_failed=true}else{system_failed=true}}}}}
  let native=job.config.frame!="mac"&&(job.config.cursor=="normal"||job.config.cursor=="highlight");let target=&job.target;
  let mut source=if target.mode=="window"{format!("gfxcapture=hwnd={}:width={}:height={}:resize_mode=crop",target.window,job.bounds.w,job.bounds.h)}else{format!("gfxcapture=hmonitor={}",target.monitor)};
  if target.mode=="area" {let r=target.rect.unwrap();let monitors=unsafe{MonitorFromPoint(POINT{x:job.bounds.x,y:job.bounds.y},MONITOR_DEFAULTTONEAREST)};let mut info=windows::Win32::Graphics::Gdi::MONITORINFO{cbSize:std::mem::size_of::<windows::Win32::Graphics::Gdi::MONITORINFO>() as u32,..Default::default()};unsafe{let _=windows::Win32::Graphics::Gdi::GetMonitorInfoW(monitors,&mut info);}let w=(info.rcMonitor.right-info.rcMonitor.left) as u32;let h=(info.rcMonitor.bottom-info.rcMonitor.top) as u32;source+=&format!(":crop_left={}:crop_top={}:crop_right={}:crop_bottom={}",r.x,r.y,w-r.x as u32-r.w,h-r.y as u32-r.h);}
@@ -162,7 +167,7 @@ fn start_segment(job:&Session)->Res<Running>{
  if CANCEL.load(Ordering::Relaxed){stop.store(true,Ordering::Relaxed);for track in audio{let _=track.join.join();}return Err("Recording cancelled.".into());}
  // Start the shared clock at the first source picture, before resampling or
  // either CPU or GPU encoding can queue it. Reset PTS to that same picture.
- let mut c=ffmpeg();c.args(["-loglevel","info","-nostats","-f","lavfi","-i",&source,"-vf",&format!("setpts=PTS-STARTPTS,showinfo=checksum=0,fps={}:eof_action=pass,hwdownload,format=bgra,pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:black",job.config.fps),"-an","-r",&job.config.fps.to_string()]);capture_video_settings(&mut c,job.gpu);c.args(["-movflags","+frag_keyframe+empty_moov+default_base_moof"]).arg(&raw).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+ let mut c=ffmpeg();c.args(["-loglevel","info","-nostats","-f","lavfi","-i",&source,"-vf",&format!("setpts=PTS-STARTPTS,showinfo=checksum=0,fps={}:eof_action=pass,hwdownload,format=bgra,pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:black",job.config.fps),"-an","-r",&job.config.fps.to_string()]);capture_video_settings(&mut c,&job.config,job.gpu);c.args(["-movflags","+frag_keyframe+empty_moov+default_base_moof"]).arg(&raw).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
  let mut child=match c.creation_flags(HIDDEN).spawn(){Ok(child)=>child,Err(e)=>{stop.store(true,Ordering::Relaxed);for track in audio{let _=track.join.join();}return Err(e.to_string());}};let stderr=child.stderr.take().unwrap();let signal=gate.clone();let diagnostic=job.dir.join(format!("capture-{i}.log"));
  thread::spawn(move||{let mut log=fs::File::create(diagnostic).ok();for line in BufReader::new(stderr).lines().map_while(Result::ok){
   if line.contains("showinfo"){
@@ -170,24 +175,53 @@ fn start_segment(job:&Session)->Res<Running>{
   }else if let Some(log)=log.as_mut(){let _=writeln!(log,"{line}");}
  }});
  let start=Instant::now();while gate.lock().unwrap().is_none(){if CANCEL.load(Ordering::Relaxed)||child.try_wait().map_err(|e|e.to_string())?.is_some()||start.elapsed()>Duration::from_secs(12){stop.store(true,Ordering::Relaxed);let _=child.kill();let _=child.wait();for t in audio{let _=t.join.join();}return Err("The capture source did not produce video. Check the selected window and graphics driver.".into());}thread::sleep(Duration::from_millis(30));}
- let pointer=if job.config.cursor=="highlight"||job.config.cursor=="large"||(job.config.frame=="mac"&&job.config.cursor!="hidden")||job.config.click_effect||job.config.cursor_effect!="none" {
- let stopped=stop.clone();let clock=gate.clone();let target=target.clone();let bounds=job.bounds;let file=commands.clone();let size=job.config.cursor_size;let arrow=job.config.cursor=="large"||(job.config.frame=="mac"&&job.config.cursor=="normal");let clicks=job.config.click_effect;let effect=job.config.cursor_effect.clone();let strength=job.config.effect_strength;let click_size=size*2;let spot_size=(size*6).min(bounds.w.min(bounds.h)).max(2);
- Some(thread::spawn(move||{unsafe{windows::Win32::Media::timeBeginPeriod(1);}let Ok(f)=fs::File::create(file)else{unsafe{windows::Win32::Media::timeEndPeriod(1);}return};let mut f=std::io::BufWriter::new(f);let mut was_down=false;let mut last_write=-1.0f64;let mut click_events=[None::<(f64,i32,i32)>;CLICK_SLOTS];let mut click_slot=0;let mut history=std::collections::VecDeque::<(f64,i32,i32)>::new();
- while !stopped.load(Ordering::Relaxed){let t=clock.lock().unwrap().map(|g|g.elapsed().as_secs_f64()).unwrap_or(0.);let r=if target.mode=="window"{window_rect(target.window).unwrap_or(bounds)}else{bounds};let mut p=POINT::default();let down=unsafe{let _=GetCursorPos(&mut p);(GetAsyncKeyState(0x01) as u16|GetAsyncKeyState(0x02) as u16)&0x8000!=0};let inside=p.x>=r.x&&p.y>=r.y&&p.x<r.x+bounds.w as i32&&p.y<r.y+bounds.h as i32;
- if t-last_write<0.005{thread::sleep(Duration::from_millis(1));continue;}last_write=t;
- let (x,y)=if inside{(p.x-r.x-if arrow{(size as f32*5./64.).round()as i32}else{size as i32/2},p.y-r.y-if arrow{(size as f32*3./64.).round()as i32}else{size as i32/2})}else{(-200,-200)};
- if clicks&&down&&!was_down&&inside{click_events[click_slot]=Some((t,p.x-r.x-click_size as i32/2,p.y-r.y-click_size as i32/2));click_slot=(click_slot+1)%CLICK_SLOTS;}was_down=down;
- let _=writeln!(f,"{t:.3} overlay@pointer x {x};\n{t:.3} overlay@pointer y {y};");
- for (slot,event) in click_events.iter_mut().enumerate(){if let Some((at,cx,cy))=*event{let age=t-at;if age<0.5{let frame=((age/0.5*60.).floor()as i32).clamp(0,60);let _=writeln!(f,"{t:.3} overlay@click{slot} x {cx};\n{t:.3} overlay@click{slot} y {cy};\n{t:.3} colorchannelmixer@clickalpha{slot} aa 1;\n{t:.3} crop@clickframe{slot} x {};",frame*click_size as i32);}else{let _=writeln!(f,"{t:.3} colorchannelmixer@clickalpha{slot} aa 0;");*event=None;}}}
- if effect=="spotlight"{let sx=(p.x-r.x-spot_size as i32/2).clamp(0,(bounds.w-spot_size)as i32);let sy=(p.y-r.y-spot_size as i32/2).clamp(0,(bounds.h-spot_size)as i32);let dim=if inside{-0.16*strength}else{0.};let alpha=if inside{1.}else{0.};let _=writeln!(f,"{t:.3} eq@spotdim brightness {dim:.3};\n{t:.3} crop@spotcrop x {sx};\n{t:.3} crop@spotcrop y {sy};\n{t:.3} overlay@spotlight x {sx};\n{t:.3} overlay@spotlight y {sy};\n{t:.3} colorchannelmixer@spotalpha aa {alpha};");}
- if effect=="trail"{history.push_back((t,p.x-r.x,p.y-r.y));while history.front().map(|v|t-v.0>0.3).unwrap_or(false){history.pop_front();}for (i,delay)in [0.025,0.065,0.12].iter().enumerate(){let past=history.iter().rev().find(|v|v.0<=t-delay).or(history.front());if let Some((_,px,py))=past{let moved=(*px-(p.x-r.x)).abs()+(*py-(p.y-r.y)).abs();let alpha=if inside{(moved as f64/35.).min(1.)*strength*(1.-i as f64*0.25)}else{0.};let tx=px-size as i32/2;let ty=py-size as i32/2;let _=writeln!(f,"{t:.3} overlay@trail{i} x {tx};\n{t:.3} overlay@trail{i} y {ty};\n{t:.3} colorchannelmixer@trailalpha{i} aa {alpha:.3};");}}}
- thread::sleep(Duration::from_millis(2));}
- unsafe{windows::Win32::Media::timeEndPeriod(1);}
- }))}else{None};
+ // Keep semantic input events for future editing even when no cursor effect
+ // is currently enabled. Only create FFmpeg commands when effects need them.
+ let stopped=stop.clone();let clock=gate.clone();let target=target.clone();let bounds=job.bounds;
+ let file=commands.clone();let events_path=capture.join(format!("cursor-{i}.jsonl"));let config=job.config.clone();
+ let pointer=Some(thread::spawn(move||{
+  unsafe{windows::Win32::Media::timeBeginPeriod(1);}
+  let result=(||->Res<()>{
+   let mut events=std::io::BufWriter::new(fs::File::create(events_path).map_err(|e|e.to_string())?);
+   let mut commands=if project::cursor_effects(&config){Some(std::io::BufWriter::new(fs::File::create(&file).map_err(|e|e.to_string())?))}else{None};
+   let mut program=project::CursorProgram::new(&config,bounds.w,bounds.h);let mut last=-1.;
+   let initial=project::CursorSample{time:0.,x:-200,y:-200,inside:false,buttons:0};serde_json::to_writer(&mut events,&initial).map_err(|e|e.to_string())?;writeln!(events).map_err(|e|e.to_string())?;if let Some(commands)=commands.as_mut(){program.push(&initial,commands).map_err(|e|e.to_string())?;}
+   while !stopped.load(Ordering::Relaxed){
+    let time=clock.lock().unwrap().map(|g|g.elapsed().as_secs_f64()).unwrap_or(0.);
+    if time-last<0.005{thread::sleep(Duration::from_millis(1));continue;}last=time;
+    let r=if target.mode=="window"{window_rect(target.window).unwrap_or(bounds)}else{bounds};let mut pointer=POINT::default();
+    let buttons=unsafe{let _=GetCursorPos(&mut pointer);u8::from((GetAsyncKeyState(0x01)as u16&0x8000)!=0)|(u8::from((GetAsyncKeyState(0x02)as u16&0x8000)!=0)<<1)};
+    let sample=project::CursorSample{time,x:pointer.x-r.x,y:pointer.y-r.y,inside:pointer.x>=r.x&&pointer.y>=r.y&&pointer.x<r.x+bounds.w as i32&&pointer.y<r.y+bounds.h as i32,buttons};
+    serde_json::to_writer(&mut events,&sample).map_err(|e|e.to_string())?;writeln!(events).map_err(|e|e.to_string())?;
+    if let Some(commands)=commands.as_mut(){program.push(&sample,commands).map_err(|e|e.to_string())?;}
+    thread::sleep(Duration::from_millis(2));
+   }
+   events.flush().map_err(|e|e.to_string())?;if let Some(commands)=commands.as_mut(){commands.flush().map_err(|e|e.to_string())?;}Ok(())
+  })();
+  if let Err(error)=result{log_error(&format!("Cursor source data could not be saved: {error}"));}
+  unsafe{windows::Win32::Media::timeEndPeriod(1);}
+ }));
 
  Ok(Running{child,stop,gate,audio,pointer,raw,commands,mic_failed,system_failed})
 }
-fn finish_segment(mut running:Running)->Res<Segment>{let duration=running.gate.lock().unwrap().map(|t|t.elapsed().as_secs_f64()).unwrap_or(0.).max(0.1);running.stop.store(true,Ordering::Relaxed);if let Some(input)=running.child.stdin.as_mut(){let _=input.write_all(b"q\n");}let start=Instant::now();loop{if running.child.try_wait().map_err(|e|e.to_string())?.is_some(){break;}if start.elapsed()>Duration::from_secs(12){let _=running.child.kill();let _=running.child.wait();break;}thread::sleep(Duration::from_millis(40));}if let Some(p)=running.pointer{let _=p.join();}let mut paths=Vec::new();for track in running.audio {track.join.join().map_err(|_|"An audio capture thread stopped unexpectedly.")??;paths.push((track.path,track.mic));}Ok(Segment{raw:running.raw,audio:paths,commands:running.commands,duration})}
+fn finish_segment(mut running:Running,fps:u32)->Res<Segment>{
+ let duration=running.gate.lock().unwrap().map(|t|t.elapsed().as_secs_f64()).unwrap_or(0.).max(0.1);
+ let duration=(duration*fps as f64).ceil()/fps as f64;
+ running.stop.store(true,Ordering::Relaxed);
+ if let Some(mut input)=running.child.stdin.take(){let _=input.write_all(b"q\n");}
+ let start=Instant::now();
+ loop{
+  if running.child.try_wait().map_err(|e|e.to_string())?.is_some(){break;}
+  if start.elapsed()>Duration::from_secs(12){let _=running.child.kill();let _=running.child.wait();log_error("Capture shutdown exceeded 12 seconds; recovering fragmented capture.");break;}
+  thread::sleep(Duration::from_millis(40));
+ }
+ if let Some(p)=running.pointer{let _=p.join();}
+ let mut paths=Vec::new();
+ for track in running.audio{match export::join_audio(track){Ok(path)=>paths.push(path),Err(error)=>{
+  log_error(&error);if let Some(state)=STATE.lock().unwrap().as_mut(){state.error=Some("An audio device stopped responding. The video will be saved without that audio track.".into());}
+ }}}
+ Ok(Segment{raw:running.raw,audio:paths,commands:running.commands,duration})
+}
 fn render_png(svg:&str,path:&Path)->Res<()> {let mut options=resvg::usvg::Options::default();if svg.contains("<text"){static FONTS:std::sync::OnceLock<Arc<resvg::usvg::fontdb::Database>>=std::sync::OnceLock::new();options.fontdb=FONTS.get_or_init(||{let mut database=resvg::usvg::fontdb::Database::new();database.load_system_fonts();Arc::new(database)}).clone();}let tree=resvg::usvg::Tree::from_str(svg,&options).map_err(|e|e.to_string())?;let size=tree.size().to_int_size();let mut pix=resvg::tiny_skia::Pixmap::new(size.width(),size.height()).ok_or("The recording frame is too large.")?;resvg::render(&tree,resvg::tiny_skia::Transform::identity(),&mut pix.as_mut());pix.save_png(path).map_err(|e|e.to_string())}
 fn cursor_svg(c:&Config)->String {
  let mac=c.frame=="mac";let arrow=if mac{"M5 3V52L17 40L27 60L36 56L27 36H45Z"}else{"M5 3V50L17 38L27 59L36 55L27 35H45Z"};
@@ -215,56 +249,73 @@ fn click_sprite(c:&Config)->String{
 #[tauri::command]pub fn recorder_click_preview(config:Config)->Res<String>{validate(&config)?;Ok(click_sprite(&config))}
 #[tauri::command]pub fn recorder_default_config()->Config{Config::default()}
 #[tauri::command]pub fn recorder_cursor_preview(config:Config)->Res<String>{validate(&config)?;let mut preview=config.clone();if preview.cursor=="normal"{preview.cursor="large".into();preview.cursor_color="#202633".into();}Ok(cursor_svg(&preview))}
+#[cfg(test)]
 fn finish(job:&Session)->Res<(PathBuf,Option<PathBuf>)>{
- let total_duration=job.segments.iter().map(|s|s.duration).sum::<f64>().max(0.1);let mut completed=Vec::new();let mut segment_offset=0.;let c=&job.config;let size=c.cursor_size;let color=&c.cursor_color;
+ finish_controlled(job,export::Control::default())
+}
+fn finish_controlled(job:&Session,control:export::Control)->Res<(PathBuf,Option<PathBuf>)>{finish_partitioned_controlled(job,render::worker_limit(job.gpu),job.config.fps as u64*15,control)}
+#[cfg(test)]
+fn finish_partitioned(job:&Session,workers:usize,frames_per_part:u64)->Res<(PathBuf,Option<PathBuf>)>{finish_partitioned_controlled(job,workers,frames_per_part,export::Control::default())}
+fn finish_partitioned_controlled(job:&Session,workers:usize,frames_per_part:u64,control:export::Control)->Res<(PathBuf,Option<PathBuf>)>{
+ let parts=render::parts(job,frames_per_part);let preparation=export::PreparationProgress::new(job,&parts,control.clone());let mut assets=render::Assets::new();let mut prepared=Vec::new();
+ let total_duration=job.segments.iter().map(|s|s.duration).sum::<f64>().max(0.1);let mut completed=Vec::new();let c=&job.config;let size=c.cursor_size;let color=&c.cursor_color;
  let pointer=job.dir.join("pointer.png");let click=job.dir.join("click.png");
- render_png(&cursor_svg(c),&pointer)?;
- render_png(&click_sprite(c),&click)?;
+ assets.push(cursor_svg(c),pointer.clone());
+ assets.push(click_sprite(c),click.clone());
  let spot_size=(size*6).min(job.bounds.w.min(job.bounds.h)).max(2);let mask=job.dir.join("spotlight-mask.png");let trail=job.dir.join("trail.png");
- if c.cursor_effect=="spotlight"{render_png(&format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{spot_size}" height="{spot_size}"><defs><radialGradient id="soft"><stop offset="65%" stop-color="white"/><stop offset="100%" stop-color="black"/></radialGradient></defs><rect width="100%" height="100%" fill="url(#soft)"/></svg>"#),&mask)?;}
- if c.cursor_effect=="trail"{render_png(&format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 64 64"><defs><radialGradient id="soft"><stop stop-color="{color}" stop-opacity=".7"/><stop offset="100%" stop-color="{color}" stop-opacity="0"/></radialGradient></defs><circle cx="32" cy="32" r="29" fill="url(#soft)"/></svg>"#),&trail)?;}
+ if c.cursor_effect=="spotlight"{assets.push(format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{spot_size}" height="{spot_size}"><defs><radialGradient id="soft"><stop offset="65%" stop-color="white"/><stop offset="100%" stop-color="black"/></radialGradient></defs><rect width="100%" height="100%" fill="url(#soft)"/></svg>"#),mask.clone());}
+ if c.cursor_effect=="trail"{assets.push(format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 64 64"><defs><radialGradient id="soft"><stop stop-color="{color}" stop-opacity=".7"/><stop offset="100%" stop-color="{color}" stop-opacity="0"/></radialGradient></defs><circle cx="32" cy="32" r="29" fill="url(#soft)"/></svg>"#),trail.clone());}
 
- for (i,segment) in job.segments.iter().enumerate(){
-  let result=job.dir.join(format!("finished-{i}.mp4"));let mut cmd=ffmpeg();cmd.args(["-filter_complex_threads","1"]);cmd.arg("-i").arg(&segment.raw);let effects=segment.commands.exists();let mut next=1;let mut filters=vec![format!("[0:v]fps={},tpad=stop_mode=clone:stop_duration={}[base]",c.fps,segment.duration)];let mut video="base".to_string();
+ for (i,part) in parts.iter().enumerate(){let segment=part.segment;let segment_offset=part.offset;
+  let result=job.dir.join(format!("finished-{i}.mp4"));let mut cmd=ffmpeg();let filter_threads=thread::available_parallelism().map(|n|(n.get()/workers.max(1)).clamp(1,4)).unwrap_or(1).to_string();cmd.args(["-filter_complex_threads",&filter_threads]);cmd.args(["-ss",&format!("{:.9}",part.start)]).arg("-i").arg(&segment.raw);let effects=segment.commands.exists();let mut next=1;let mut filters=vec![format!("[0:v]fps={},tpad=stop_mode=clone:stop_duration={}[base]",c.fps,part.duration)];let mut video="base".to_string();
   if effects {
    cmd.args(["-framerate",&c.fps.to_string(),"-loop","1","-i"]).arg(&pointer);cmd.args(["-framerate",&c.fps.to_string(),"-loop","1","-i"]).arg(&click);next=3;
    let main_commands=job.dir.join(format!("cursor-main-{i}.txt"));let mut main_text=String::new();let mut click_text=(0..CLICK_SLOTS).map(|n|format!("0 crop@clickframe{n} x 0;\n")).collect::<Vec<_>>();
    for line in BufReader::new(fs::File::open(&segment.commands).map_err(|e|e.to_string())?).lines(){let line=line.map_err(|e|e.to_string())?;if let Some(n)=(0..CLICK_SLOTS).find(|n|line.contains(&format!("crop@clickframe{n} "))||line.contains(&format!("colorchannelmixer@clickalpha{n} "))){click_text[n].push_str(&line);click_text[n].push('\n');}else{main_text.push_str(&line);main_text.push('\n');}}
-   fs::write(&main_commands,main_text).map_err(|e|e.to_string())?;
+   fs::write(&main_commands,export::frame_commands_range(&main_text,c.fps,part.start,part.duration,&control)?).map_err(|e|e.to_string())?;
    filters.push(format!("[base]sendcmd=f='{}'[commands];[commands][1:v]overlay@pointer=x=-200:y=-200:shortest=1:format=auto[pointer];[2:v]split={CLICK_SLOTS}{}",escaped(&main_commands),(0..CLICK_SLOTS).map(|n|format!("[clicksheet{n}]")).collect::<String>()));
    video="pointer".into();
-   for n in 0..CLICK_SLOTS{let timeline=job.dir.join(format!("click-{i}-{n}.txt"));fs::write(&timeline,&click_text[n]).map_err(|e|e.to_string())?;filters.push(format!("[clicksheet{n}]sendcmd=f='{}',crop@clickframe{n}=w={}:h={}:x=0:y=0,format=rgba,colorchannelmixer@clickalpha{n}=aa=0[clickfx{n}];[{video}][clickfx{n}]overlay@click{n}=x=-200:y=-200:shortest=1:format=auto[clicked{n}]",escaped(&timeline),size*2,size*2));video=format!("clicked{n}");}
+   for n in 0..CLICK_SLOTS{let timeline=job.dir.join(format!("click-{i}-{n}.txt"));fs::write(&timeline,export::frame_commands_range(&click_text[n],c.fps,part.start,part.duration,&control)?).map_err(|e|e.to_string())?;filters.push(format!("[clicksheet{n}]sendcmd=f='{}',crop@clickframe{n}=w={}:h={}:x=0:y=0,format=rgba,colorchannelmixer@clickalpha{n}=aa=0[clickfx{n}];[{video}][clickfx{n}]overlay@click{n}=x=-200:y=-200:shortest=1:format=auto[clicked{n}]",escaped(&timeline),size*2,size*2));video=format!("clicked{n}");}
+   preparation.advance();
   }
   if effects&&c.cursor_effect=="spotlight"{cmd.args(["-framerate",&c.fps.to_string(),"-loop","1","-i"]).arg(&mask);filters.push(format!("[{video}]split[spotbase][spotpatch];[spotbase]eq@spotdim=brightness=0[dimmed];[spotpatch]crop@spotcrop=w={spot_size}:h={spot_size}:x=0:y=0,format=rgba[patch];[{next}:v]format=gray[spotmask];[patch][spotmask]alphamerge,colorchannelmixer@spotalpha=aa=0[spot];[dimmed][spot]overlay@spotlight=x=0:y=0:shortest=1:format=auto[spotted]"));video="spotted".into();next+=1;}
   if effects&&c.cursor_effect=="trail"{for n in 0..3{cmd.args(["-framerate",&c.fps.to_string(),"-loop","1","-i"]).arg(&trail);filters.push(format!("[{next}:v]format=rgba,colorchannelmixer@trailalpha{n}=aa=0[trailfx{n}];[{video}][trailfx{n}]overlay@trail{n}=x=-200:y=-200:shortest=1:format=auto[trailed{n}]"));video=format!("trailed{n}");next+=1;}}
   for annotation in &job.annotations{
-   let from=(annotation.start-segment_offset).max(0.);let to=(annotation.end.unwrap_or(f64::MAX)-segment_offset).min(segment.duration);if from>=segment.duration||to<=from{continue;}
-   let label=format!("ann{}_{}",i,annotation.id);let mut timeline=crate::recorder_annotations::timeline(annotation,segment_offset,segment.duration);let mut sampled=Vec::new();for (time,shape)in timeline.drain(..){let tick=(time*c.fps as f64).round()as u64;if sampled.last().map(|(t,_) : &(f64,crate::recorder_annotations::Annotation)|(*t*c.fps as f64).round()as u64==tick).unwrap_or(false){sampled.pop();}sampled.push((tick as f64/c.fps as f64,shape));}let timeline=sampled;
+   let from=(annotation.start-segment_offset).max(0.);let to=(annotation.end.unwrap_or(f64::MAX)-segment_offset).min(part.duration);if from>=part.duration||to<=from{continue;}
+   let label=format!("ann{}_{}",i,annotation.id);let mut timeline=crate::recorder_annotations::timeline(annotation,segment_offset,part.duration);let mut sampled=Vec::new();for (time,shape)in timeline.drain(..){let tick=(time*c.fps as f64).round()as u64;if sampled.last().map(|(t,_) : &(f64,crate::recorder_annotations::Annotation)|(*t*c.fps as f64).round()as u64==tick).unwrap_or(false){sampled.pop();}sampled.push((tick as f64/c.fps as f64,shape));}let timeline=sampled;
    let (x,y,w,h)=if annotation.kind=="blur"{let (x,y,w,h)=crate::recorder_annotations::canvas_bounds(annotation);let x=x as u32/2*2;let y=y as u32/2*2;(x as i32,y as i32,w.min(job.bounds.w-x).max(2)/2*2,h.min(job.bounds.h-y).max(2)/2*2)}else{crate::recorder_annotations::canvas_bounds(annotation)};
    let list=job.dir.join(format!("annotation-{}-{i}.ffconcat",annotation.id));let mut entries=String::from("ffconcat version 1.0\n");
    for (index,(time,shape)) in timeline.iter().enumerate(){
-    if CANCEL.load(Ordering::Relaxed){return Err("Recording cancelled.".into());}
+    if control.cancelled(){return Err("Recording cancelled.".into());}
     let asset=job.dir.join(format!("annotation-{}-{i}-{index}.png",annotation.id));
     let svg=if annotation.kind=="blur"{format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="{x} {y} {w} {h}"><rect x="{x}" y="{y}" width="{w}" height="{h}" fill="black"/><rect x="{}" y="{}" width="{}" height="{}" fill="white"/></svg>"##,shape.x.min(shape.x+shape.w),shape.y.min(shape.y+shape.h),shape.w.abs(),shape.h.abs())}else{crate::recorder_annotations::asset_on_canvas(shape,(x,y,w,h)).0};
-    render_png(&svg,&asset)?;let until=timeline.get(index+1).map(|(t,_)|*t).unwrap_or(segment.duration+1.);let duration=(until-time).max(1./c.fps as f64);
+    assets.push(svg,asset.clone());let until=timeline.get(index+1).map(|(t,_)|*t).unwrap_or(part.duration+1.);let duration=(until-time).max(1./c.fps as f64);
     entries+=&format!("file '{}'\noption framerate {}\nduration {duration:.6}\n",asset.to_string_lossy().replace('\\',"/").replace('\'',"'\\''"),c.fps);
    }
-   fs::write(&list,entries).map_err(|e|e.to_string())?;cmd.args(["-f","concat","-safe","0","-i"]).arg(list);
-   if annotation.kind=="blur"{let radius=(w.min(h)/2).saturating_sub(1).min(8).max(1);filters.push(format!("[{video}]split[{label}base][{label}patch];[{label}patch]crop={w}:{h}:{x}:{y},boxblur={radius}:2,format=rgba[{label}blur];[{next}:v]format=gray[{label}mask];[{label}blur][{label}mask]alphamerge[{label}masked];[{label}base][{label}masked]overlay={x}:{y}:format=auto:enable='gte(t,{from})*lt(t,{to})'[{label}]"));}
+   fs::write(&list,entries).map_err(|e|e.to_string())?;cmd.args(["-f","concat","-safe","0","-i"]).arg(list);preparation.advance();
+   if annotation.kind=="blur"{let radius=(w.min(h)/2).saturating_sub(1).min(8).max(1);filters.push(format!("[{video}]split[{label}base][{label}patch];[{label}patch]crop={w}:{h}:{x}:{y},boxblur={radius}:2:enable='gte(t,{from})*lt(t,{to})',format=yuv444p[{label}blur];[{next}:v]format=gray[{label}mask];[{label}blur][{label}mask]alphamerge[{label}masked];[{label}base][{label}masked]overlay={x}:{y}:format=auto:enable='gte(t,{from})*lt(t,{to})'[{label}]"));}
    else{filters.push(format!("[{video}][{next}:v]overlay={x}:{y}:format=auto:enable='gte(t,{from})*lt(t,{to})'[{label}]"));}next+=1;video=label;
   }
   if c.resolution!="original"{let (w,h)=if c.resolution=="720p"{(1280,720)}else{(1920,1080)};filters.push(format!("[{video}]scale=w='min(iw,{w})':h='min(ih,{h})':force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos[scaled]"));video="scaled".into();}
-  let mut audio_labels=Vec::new();for (j,(path,is_mic)) in segment.audio.iter().enumerate(){cmd.arg("-i").arg(path);let mic=*is_mic;let gain=if mic{c.mic_gain}else{c.system_gain};let enhance=if mic&&c.voice_enhance{"highpass=f=75,afftdn=nf=-25:tn=1,acompressor=threshold=0.125:ratio=2:attack=5:release=120:makeup=1.5,"}else{""};filters.push(format!("[{}:a]aresample=48000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,{}volume={},apad,atrim=duration={}[a{j}]",next+j,enhance,gain,segment.duration));audio_labels.push(format!("[a{j}]"));}
-  let input_count=next+segment.audio.len();if audio_labels.is_empty()&&job.segments.iter().any(|s|!s.audio.is_empty()){cmd.args(["-f","lavfi","-i","anullsrc=r=48000:cl=stereo"]);filters.push(format!("[{input_count}:a]atrim=duration={}[silent]",segment.duration));audio_labels.push("[silent]".into());}
-  if !audio_labels.is_empty(){filters.push(format!("{}amix=inputs={}:normalize=0,alimiter=limit=0.95[audio]",audio_labels.join(""),audio_labels.len()));}
-  cmd.args(["-filter_complex",&filters.join(";"),"-map",&format!("[{video}]")]);if !audio_labels.is_empty(){cmd.args(["-map","[audio]","-c:a","aac","-b:a","192k","-ar","48000"]);}intermediate_video_settings(&mut cmd,false);cmd.args(["-t",&segment.duration.to_string(),"-movflags","+faststart"]).arg(&result);run_progress(cmd,segment.duration,80.*segment_offset/total_duration,80.*(segment_offset+segment.duration)/total_duration)?;completed.push(result);segment_offset+=segment.duration;
+  if c.frame!="none"{
+   let (w,h)=export::styled_size(c,job.bounds.w,job.bounds.h);let pad=frame_pad(c,w);
+   let frame=job.dir.join(format!("frame-{i}.png"));assets.push(mockup_svg(c,w,h),frame.clone());
+   cmd.args(["-framerate",&c.fps.to_string(),"-loop","1","-i"]).arg(frame);let frame_input=next;next+=1;
+   if let Some(id)=background_preset(c){
+    let bg=job.dir.join(format!("background-{i}.png"));assets.push(background_svg(id,w+2*pad,h+2*pad+40),bg.clone());
+    cmd.args(["-framerate",&c.fps.to_string(),"-loop","1","-i"]).arg(bg);
+    filters.push(format!("[{next}:v][{video}]overlay={pad}:{}:shortest=1:format=auto[padded];[padded][{frame_input}:v]overlay=0:0:shortest=1:format=auto[framed]",pad+40));
+   }else{filters.push(format!("[{video}]pad=iw+{}:ih+{}:{pad}:{}:color={}[padded];[padded][{frame_input}:v]overlay=0:0:shortest=1:format=auto[framed]",2*pad,2*pad+40,pad+40,c.background));}
+   video="framed".into();
+  }
+  let graph=filters.join(";").replace("format=auto","format=yuv444");cmd.args(["-filter_complex",&graph,"-map",&format!("[{video}]"),"-an"]);video_settings(&mut cmd,c,job.gpu);cmd.args(["-t",&part.duration.to_string(),"-movflags","+faststart"]).arg(&result);prepared.push((cmd,part.duration,part.cost));preparation.advance();completed.push(result);
  }
- let list=job.dir.join("segments.txt");fs::write(&list,completed.iter().map(|p|format!("file '{}'\n",p.to_string_lossy().replace('\\',"/").replace('\'',"'\\''"))).collect::<String>()).map_err(|e|e.to_string())?;
- let export=job.dir.join("export-working.mp4");let mut cmd=ffmpeg();cmd.args(["-f","concat","-safe","0","-i"]).arg(list).args(["-c","copy","-movflags","+faststart"]).arg(&export);run_progress(cmd,total_duration,80.,85.)?;
- if let Some(original)=&job.original_output {
- let mut original_cmd=ffmpeg();original_cmd.arg("-i").arg(&export);video_settings(&mut original_cmd,c,job.gpu);original_cmd.args(["-c:a","copy","-movflags","+faststart"]).arg(original);run_progress(original_cmd,total_duration,85.,87.)?;let info=crate::process::video_info(&export).ok_or("Could not read the finished video dimensions.")?;let frame=job.dir.join("frame.png");render_png(&mockup_svg(c,info.w,info.h),&frame)?;let framed=job.dir.join("export-mockup.mp4");let mut command=ffmpeg();let pad=frame_pad(c,info.w);let rate=c.fps.to_string();command.arg("-i").arg(&export).args(["-framerate",&rate,"-loop","1","-i"]).arg(&frame);let graph=if let Some(id)=background_preset(c){let bg=job.dir.join("background.png");render_png(&background_svg(id,info.w+2*pad,info.h+2*pad+40),&bg)?;command.args(["-framerate",&rate,"-loop","1","-i"]).arg(&bg);format!("[0:v]setpts=PTS-STARTPTS[v0];[2:v][v0]overlay={}:{}:shortest=1:format=auto[padded];[padded][1:v]overlay=0:0:shortest=1:format=auto[framed]",pad,pad+40)}else{format!("[0:v]setpts=PTS-STARTPTS,pad=iw+{}:ih+{}:{}:{}:color={}[padded];[padded][1:v]overlay=0:0:shortest=1:format=auto[framed]",2*pad,2*pad+40,pad,pad+40,c.background)};command.args(["-filter_complex_threads","1","-filter_complex",&graph,"-map","[framed]","-map","0:a?","-c:a","copy"]);video_settings(&mut command,c,job.gpu);command.args(["-t",&total_duration.to_string(),"-movflags","+faststart"]).arg(&framed);run_progress(command,total_duration,87.,99.)?;copy_progress(&framed,&job.output,99.,100.)?;Ok((job.output.clone(),Some(original.clone())))
- }else{let delivery=job.dir.join("export-original.mp4");let mut command=ffmpeg();command.arg("-i").arg(&export);video_settings(&mut command,c,job.gpu);command.args(["-c:a","copy","-movflags","+faststart"]).arg(&delivery);run_progress(command,total_duration,85.,99.)?;copy_progress(&delivery,&job.output,99.,100.)?;Ok((job.output.clone(),None))}
-
+ assets.prepare(&preparation,4)?;preparation.complete();
+ control.set_stage(2);
+ render::parallel(prepared,workers,total_duration,control.clone())?;
+ control.set_stage(4);
+ export::concat_delivery_controlled(&completed,&job.output,&job.dir.join("styled-segments.txt"),total_duration,0.,100.,job.original_output.as_deref(),None,&control)?;
+ Ok((job.output.clone(),job.original_output.clone()))
 }
 
 fn preset_stops(id:&str)->Option<[&'static str;3]>{Some(match id{"aurora"=>["#5b8def","#8f6bf0","#20c4cb"],"sunset"=>["#ff9966","#ff5e8a","#8e4fd8"],"ocean"=>["#0f2a6b","#1f6fd6","#3fd0e8"],"forest"=>["#0e3b2e","#1e8a6a","#8ad9a8"],"midnight"=>["#0a0e22","#1d2a5c","#3b3f9a"],"peach"=>["#ffd6c0","#ffb3c1","#c9b6ff"],"mint"=>["#d1f7e6","#9ee6d4","#7ac6f2"],"graphite"=>["#2b2f3a","#454c5e","#6b7488"],"candy"=>["#ff8ad8","#a78bfa","#60a5fa"],"lavender"=>["#e0c3fc","#c4b5fd","#8ec5fc"],"lagoon"=>["#00c6a7","#1e9bd7","#4b5cc4"],"ember"=>["#ff512f","#dd2476","#3a1c71"],"rose"=>["#ff9a9e","#fecfef","#a18cd1"],"gold"=>["#f6d365","#fda085","#f5576c"],"sky"=>["#89f7fe","#66a6ff","#5b7cfa"],"violet"=>["#6a11cb","#8a4fff","#2575fc"],"emerald"=>["#0f9b8e","#38ef7d","#b6f3a4"],"coral"=>["#ff758c","#ff7eb3","#ffb199"],"dusk"=>["#2c3e50","#4b3f72","#fd746c"],"ice"=>["#e0f7ff","#b6e3ff","#8ab4ff"],"neon"=>["#0f0c29","#4a2a8f","#24c6dc"],"cotton"=>["#fbc2eb","#a6c1ee","#c2e9fb"],_=>return None})}
@@ -273,36 +324,109 @@ fn background_svg(id:&str,w:u32,h:u32)->String{let [a,b,m]=preset_stops(id).unwr
 /// Margin around the window in pixels: `frame_padding` is a percentage of the video width, kept even for the video encoder.
 fn frame_pad(c:&Config,w:u32)->u32{(((w as f64*c.frame_padding as f64/100.).round() as u32).max(8))&!1}
 fn mockup_svg(c:&Config,w:u32,h:u32)->String{let p=frame_pad(c,w);let outer=if background_preset(c).is_some(){"none".to_string()}else{c.background.clone()};let right=w+p;let chrome=if c.frame=="mac"{format!(r##"<circle cx="{}" cy="{}" r="6" fill="#ff5f57"/><circle cx="{}" cy="{}" r="6" fill="#febc2e"/><circle cx="{}" cy="{}" r="6" fill="#28c840"/>"##,p+20,p+20,p+40,p+20,p+60,p+20)}else{format!(r##"<path d="M{} {}h12 M{} {}h10v10h-10z M{} {}l10 10m0-10l-10 10" stroke="#253252" fill="none" stroke-width="1.3"/>"##,right.saturating_sub(78),p+19,right.saturating_sub(48),p+14,right.saturating_sub(20),p+14)};format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="{}" height="{}"><path fill="{}" fill-rule="evenodd" d="M0 0H{}V{}H0Z M{} {}H{}V{}H{}Z"/><rect x="{}" y="{}" width="{w}" height="40" rx="10" fill="#e8ecf4"/><rect x="{}" y="{}" width="{w}" height="20" fill="#e8ecf4"/>{chrome}</svg>"##,w+2*p,h+2*p+40,outer,w+2*p,h+2*p+40,p,p+40,w+p,h+p+40,p,p,p,p,p+20)}
-fn copy_progress(from:&Path,to:&Path,start:f64,end:f64)->Res<()> {use std::io::{Read,Write};let temporary=to.with_extension(format!("mp4.partial-{}",chrono::Local::now().timestamp_millis()));let mut output=fs::OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|e|e.to_string())?;let result=(||{let mut input=fs::File::open(from).map_err(|e|e.to_string())?;let total=input.metadata().map_err(|e|e.to_string())?.len().max(1);let mut written=0u64;let mut buffer=vec![0u8;262144];loop{if CANCEL.load(Ordering::Relaxed){return Err("Recording cancelled.".into());}let n=input.read(&mut buffer).map_err(|e|e.to_string())?;if n==0{break;}output.write_all(&buffer[..n]).map_err(|e|e.to_string())?;written+=n as u64;save_progress(start+(end-start)*written as f64/total as f64);}output.flush().map_err(|e|e.to_string())?;output.sync_all().map_err(|e|e.to_string())?;Ok::<_,String>(())})();drop(output);if let Err(error)=result{let _=fs::remove_file(&temporary);return Err(error);}fs::rename(&temporary,to).map_err(|e|e.to_string())?;save_progress(end);Ok(())}
 
 #[tauri::command]pub async fn recorder_start(app:tauri::AppHandle,target:Target,config:Config)->Res<()> {
+ if matches!(recorder_state().phase.as_str(),"saving"){return Err("Finish the current recording export before starting another recording.".into());}
  let _job=crate::updates::job()?;
  validate(&config)?;let bounds=bounds(&app,&target)?;if bounds.w<2||bounds.h<2||bounds.w>8192||bounds.h>8192{return Err("Select a source between 2 and 8192 pixels per side.".into());}
- tauri::async_runtime::spawn_blocking(move||{let _op=OP.lock().unwrap();if SESSION.lock().unwrap().is_some(){return Err("A recording is already active.".into());}CANCEL.store(false,Ordering::Relaxed);stop_preview();*STATE.lock().unwrap()=Some(State{phase:"preparing".into(),..Default::default()});
-  let result=(||{fs::create_dir_all(&config.output_dir).map_err(|e|e.to_string())?;let name=chrono::Local::now().format("Halo Recording %Y-%m-%d %H-%M-%S").to_string();let output=crate::process::unique(Path::new(&config.output_dir),&name,"mp4");let dir=crate::system::tools_dir().join("recorder-cache").join(chrono::Local::now().timestamp_millis().to_string());fs::create_dir_all(&dir).map_err(|e|e.to_string())?;let gpu=config.encoder=="auto"&&bounds.w+2*frame_pad(&config,bounds.w)<=4096&&bounds.h+2*frame_pad(&config,bounds.w)+40<=4096&&gpu_available(&dir,bounds.w,bounds.h,config.fps);let original_output=if config.frame!="none"{Some(crate::process::unique(Path::new(&config.output_dir),&format!("{name} (original)"),"mp4"))}else{None};let mut job=Session{config,target,bounds,dir,output,original_output,segments:vec![],running:None,gpu,mic_peak:Arc::new(AtomicU32::new(0)),sys_peak:Arc::new(AtomicU32::new(0)),mic_muted:Arc::new(AtomicBool::new(false)),sys_muted:Arc::new(AtomicBool::new(false)),annotations:vec![]};let running=start_segment(&job)?;if running.mic_failed{job.config.microphone=false;}if running.system_failed{job.config.system_audio=false;}job.running=Some(running);*SESSION.lock().unwrap()=Some(job);*STATE.lock().unwrap()=Some(State{phase:"recording".into(),target:Some(bounds),..Default::default()});Ok::<_,String>(())})();if let Err(error)=&result{phase("idle",Some(error.clone()));}result
+ tauri::async_runtime::spawn_blocking(move||{let _op=OP.lock().unwrap();if SESSION.lock().unwrap().is_some()||matches!(recorder_state().phase.as_str(),"saving"){return Err("Finish the current recording export before starting another recording.".into());}CANCEL.store(false,Ordering::Relaxed);stop_preview();*STATE.lock().unwrap()=Some(State{phase:"preparing".into(),..Default::default()});
+  let result=(||{fs::create_dir_all(&config.output_dir).map_err(|e|e.to_string())?;let name=chrono::Local::now().format("Halo Recording %Y-%m-%d %H-%M-%S").to_string();let output=crate::process::unique(Path::new(&config.output_dir),&name,"mp4");let dir=crate::system::tools_dir().join("recorder-cache").join(chrono::Local::now().timestamp_millis().to_string());fs::create_dir_all(&dir).map_err(|e|e.to_string())?;let gpu=config.encoder=="auto"&&bounds.w+2*frame_pad(&config,bounds.w)<=4096&&bounds.h+2*frame_pad(&config,bounds.w)+40<=4096&&gpu_available(&dir,bounds.w,bounds.h,config.fps);let original_output=None;let mut job=Session{config,target,bounds,dir,output,project:None,original_output,segments:vec![],running:None,gpu,mic_peak:Arc::new(AtomicU32::new(0)),sys_peak:Arc::new(AtomicU32::new(0)),mic_muted:Arc::new(AtomicBool::new(false)),sys_muted:Arc::new(AtomicBool::new(false)),annotations:vec![]};project::create(&mut job)?;let running=start_segment(&job)?;if running.mic_failed{job.config.microphone=false;}if running.system_failed{job.config.system_audio=false;}job.running=Some(running);let job_project=job.project.as_ref().map(|p|p.to_string_lossy().into_owned());*SESSION.lock().unwrap()=Some(job);*STATE.lock().unwrap()=Some(State{phase:"recording".into(),target:Some(bounds),project_path:job_project,..Default::default()});Ok::<_,String>(())})();if let Err(error)=&result{phase("idle",Some(error.clone()));}result
  }).await.map_err(|e|e.to_string())?
 }
-#[tauri::command]pub async fn recorder_pause()->Res<()> {tauri::async_runtime::spawn_blocking(||{let _op=OP.lock().unwrap();let running=SESSION.lock().unwrap().as_mut().and_then(|s|s.running.take()).ok_or("No recording is running.")?;phase("pausing",None);match finish_segment(running){Ok(segment)=>{let elapsed={let mut session=SESSION.lock().unwrap();let job=session.as_mut().unwrap();job.segments.push(segment);job.segments.iter().map(|s|s.duration).sum()};if let Some(state)=STATE.lock().unwrap().as_mut(){state.elapsed=elapsed;}phase("paused",None);Ok(())},Err(error)=>{phase("paused",Some(error.clone()));Err(error)}}}).await.map_err(|e|e.to_string())?}
+#[tauri::command]pub async fn recorder_pause()->Res<()> {tauri::async_runtime::spawn_blocking(||{let _op=OP.lock().unwrap();let (running,fps)={let mut session=SESSION.lock().unwrap();let job=session.as_mut().ok_or("No recording is active.")?;(job.running.take().ok_or("No recording is running.")?,job.config.fps)};phase("pausing",None);match finish_segment(running,fps){Ok(segment)=>{let elapsed={let mut session=SESSION.lock().unwrap();let job=session.as_mut().unwrap();job.segments.push(segment);if let Err(error)=project::checkpoint(job,None,"paused"){log_error(&format!("Project checkpoint: {error}"));}job.segments.iter().map(|s|s.duration).sum()};if let Some(state)=STATE.lock().unwrap().as_mut(){state.elapsed=elapsed;}phase("paused",None);Ok(())},Err(error)=>{phase("paused",Some(error.clone()));Err(error)}}}).await.map_err(|e|e.to_string())?}
 #[tauri::command]pub async fn recorder_resume()->Res<()> {tauri::async_runtime::spawn_blocking(||{let _op=OP.lock().unwrap();let mut lock=SESSION.lock().unwrap();let job=lock.as_mut().ok_or("No recording is paused.")?;if job.running.is_some(){return Err("Recording is already running.".into());}if let Some(state)=STATE.lock().unwrap().as_mut(){state.elapsed=job.segments.iter().map(|s|s.duration).sum();}phase("resuming",None);match start_segment(job){Ok(running)=>{if running.mic_failed{job.config.microphone=false;}if running.system_failed{job.config.system_audio=false;}job.running=Some(running);phase("recording",None);Ok(())},Err(error)=>{phase("paused",Some(error.clone()));Err(error)}}}).await.map_err(|e|e.to_string())?}
-#[tauri::command]pub async fn recorder_stop(app:tauri::AppHandle)->Res<String> {flush_annotations(&app).await?;tauri::async_runtime::spawn_blocking(move||{let _op=OP.lock().unwrap();let mut job=SESSION.lock().unwrap().take().ok_or("No recording is active.")?;if let Some(w)=app.get_webview_window("recorder-annotations"){let _=w.destroy();}save_progress(0.);phase("saving",None);let result=(||{if let Some(r)=job.running.take(){job.segments.push(finish_segment(r)?);}finish(&job)})();match result{Ok((path,original))=>{let out=path.to_string_lossy().into_owned();*STATE.lock().unwrap()=Some(State{phase:"idle".into(),output:Some(out.clone()),original_output:original.map(|p|p.to_string_lossy().into_owned()),elapsed:job.segments.iter().map(|s|s.duration).sum(),..Default::default()});let _=app.emit("halo://recording-saved",&out);Ok(out)},Err(error)=>{log_error(&format!("Export failed: {error}; retained capture: {}",job.dir.display()));let original=job.original_output.as_ref().filter(|p|p.exists()).map(|p|p.to_string_lossy().into_owned());if let Some(path)=original{*STATE.lock().unwrap()=Some(State{phase:"idle".into(),output:Some(path.clone()),original_output:Some(path),elapsed:job.segments.iter().map(|s|s.duration).sum(),error:Some("The original video was saved, but the mockup could not be completed.".into()),..Default::default()});}else{phase("idle",Some("Could not save the recording. Please try again.".into()));}Err("Could not complete the recording export. Please try again.".into())}}}).await.map_err(|e|e.to_string())?}
+#[tauri::command]pub async fn recorder_stop(app:tauri::AppHandle)->Res<String> {
+ flush_annotations(&app).await?;
+ tauri::async_runtime::spawn_blocking(move||{
+  let _op=OP.lock().unwrap();let mut job=SESSION.lock().unwrap().take().ok_or("No recording is active.")?;
+  if let Some(w)=app.get_webview_window("recorder-annotations"){let _=w.destroy();}
+  save_stage(0);phase("saving",None);
+  let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+   if let Some(r)=job.running.take(){job.segments.push(finish_segment(r,job.config.fps)?);}
+   project::checkpoint(&job,None,"ready")?;
+   let styled=export::needs_render(&job);
+   if styled&&job.original_output.is_none(){let name=format!("{} (original)",job.output.file_stem().unwrap().to_string_lossy());job.original_output=Some(crate::process::unique(job.output.parent().unwrap(),&name,"mp4"));}
+   let path=job.original_output.as_ref().unwrap_or(&job.output).clone();
+   export::save_original(&job,&path)?;
+   project::checkpoint(&job,Some(&path),if styled{"exporting"}else{"completed"})?;
+   let warning=STATE.lock().unwrap().as_ref().and_then(|s|s.error.clone());
+   let out=path.to_string_lossy().into_owned();
+   *STATE.lock().unwrap()=Some(State{phase:if styled{"exporting"}else{"idle"}.into(),output:Some(out.clone()),original_output:if styled{Some(out.clone())}else{None},elapsed:job.segments.iter().map(|s|s.duration).sum(),error:warning,project_path:job.project.as_ref().map(|p|p.to_string_lossy().into_owned()),..Default::default()});
+   let _=app.emit("halo://recording-saved",&out);
+   if styled{spawn_styled_export(app.clone(),job,out.clone());}
+   else if let Err(error)=project::set_status(&job,"completed",None){log_error(&format!("Project export status: {error}"));}
+
+   Ok(out)
+  })).unwrap_or_else(|_|Err("The recording save worker stopped unexpectedly.".into()));
+  if let Err(error)=&result{log_error(&format!("Original save failed: {error}"));phase("idle",Some("Could not finish saving the recording. The captured video has been retained for recovery.".into()));}
+  result
+ }).await.map_err(|e|e.to_string())?
+}
+
+fn spawn_styled_export(app:tauri::AppHandle,job:Session,expected_original:String){
+ match jobs::enqueue(app,job,expected_original){Ok(id)=>{if let Some(state)=STATE.lock().unwrap().as_mut(){state.export_id=Some(id);}},Err(error)=>phase("idle",Some(error))}
+}
+#[tauri::command]pub fn recorder_jobs()->Vec<jobs::View>{jobs::views()}
+pub fn cancel_background(app:&tauri::AppHandle,id:&str)->bool{jobs::cancel(app,id)}
+pub fn shutdown_background(app:&tauri::AppHandle){jobs::shutdown(app);}
+
+#[tauri::command]pub async fn recorder_open_project(app:tauri::AppHandle,path:Option<String>)->Res<Option<String>>{
+ if active(){return Err("Finish or cancel the current recording/export before opening a project.".into());}
+ let path=if let Some(path)=path{PathBuf::from(path)}else{
+  use tauri_plugin_dialog::DialogExt;let picker=app.clone();let output=PathBuf::from(config().output_dir);let sources=output.join("source-files");let directory=if sources.is_dir(){sources}else{output};
+  let selected=tauri::async_runtime::spawn_blocking(move||picker.dialog().file().add_filter("Halo recording project",&["halo"]).set_directory(directory).blocking_pick_file().and_then(|p|p.into_path().ok())).await.map_err(|e|e.to_string())?;
+  let Some(path)=selected else{return Ok(None);};path
+ };
+ tauri::async_runtime::spawn_blocking(move||{
+  let _op=OP.lock().unwrap();if active(){return Err("Finish or cancel the current recording/export before opening a project.".into());}
+  let _job=crate::updates::job()?;stop_preview();CANCEL.store(false,Ordering::Relaxed);save_progress(0.);*STATE.lock().unwrap()=Some(State{phase:"preparing".into(),..Default::default()});
+  let result:Res<Option<String>>=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+   let (mut job,cached)=project::load(&path)?;let styled=export::needs_render(&job);
+   let original=if styled{cached.unwrap_or_else(||crate::process::unique(job.output.parent().unwrap(),&format!("{} (original)",job.output.file_stem().unwrap().to_string_lossy()),"mp4"))}else{job.output.clone()};
+   if !original.exists(){export::save_original(&job,&original).map_err(|error|{log_error(&format!("Project original preparation: {error}"));"Could not prepare the original video from this project.".to_string()})?;}
+   project::set_original(&job,&original)?;let out=original.to_string_lossy().into_owned();
+   if styled{job.original_output=Some(original);}
+   *STATE.lock().unwrap()=Some(State{phase:if styled{"exporting"}else{"idle"}.into(),output:Some(out.clone()),original_output:if styled{Some(out.clone())}else{None},project_path:job.project.as_ref().map(|p|p.to_string_lossy().into_owned()),elapsed:job.segments.iter().map(|s|s.duration).sum(),..Default::default()});
+   if styled{spawn_styled_export(app.clone(),job,out.clone());}else{project::set_status(&job,"completed",None)?;}
+   Ok(Some(out))
+  })).unwrap_or_else(|_|Err("This project could not be opened.".into()));
+  if let Err(error)=&result{log_error(&format!("Project open failed: {error}"));phase("idle",Some(error.clone()));}
+  result
+ }).await.map_err(|e|e.to_string())?
+}
+
+/// Cancels only the optional styled version. The published original is immutable.
+#[tauri::command]pub fn recorder_cancel_export(app:tauri::AppHandle)->Res<()> {
+ let state=recorder_state();let id=state.export_id.ok_or("No styled export is running.")?;
+ if state.phase!="exporting"{return Err("No styled export is running.".into());}
+ jobs::cancel(&app,&id);Ok(())
+}
 
 #[tauri::command]pub async fn recorder_test_scene(app:tauri::AppHandle,fullscreen:Option<bool>)->Res<()> {if !cfg!(debug_assertions){return Err("Available only in development.".into());}if let Some(w)=app.get_webview_window("recorder-test"){w.set_fullscreen(fullscreen.unwrap_or(false)).map_err(|e|e.to_string())?;w.show().map_err(|e|e.to_string())?;}else{tauri::WebviewWindowBuilder::new(&app,"recorder-test",tauri::WebviewUrl::App("output/recorder-research/test-scene.html".into())).title("Halo Recorder Test").fullscreen(fullscreen.unwrap_or(false)).inner_size(800.,600.).build().map_err(|e|e.to_string())?;}Ok(())}
 
-pub fn active()->bool {SESSION.try_lock().map(|s|s.is_some()).unwrap_or(true)||matches!(recorder_state().phase.as_str(),"preparing"|"saving"|"pausing")}
+pub fn active()->bool {SESSION.try_lock().map(|s|s.is_some()).unwrap_or(true)||matches!(recorder_state().phase.as_str(),"preparing"|"saving"|"pausing"|"resuming")}
 
 #[tauri::command]pub fn recorder_debug_preview(app:tauri::AppHandle,enabled:bool)->Res<()> {if !cfg!(debug_assertions){return Err("Development only.".into());}let w=app.get_webview_window("recorder").ok_or("Recorder is closed.")?;let h=w.hwnd().map_err(|e|e.to_string())?;unsafe{SetWindowDisplayAffinity(HWND(h.0),if enabled{WDA_NONE}else{WDA_EXCLUDEFROMCAPTURE}).map_err(|e|e.to_string())?;}Ok(())}
 
 /// Cancel only this recorder's work; conversion and upload jobs are independent.
 pub async fn cancel_recorder(app:tauri::AppHandle)->Res<()> {
  CANCEL.store(true,Ordering::Relaxed);for label in ["recorder-annotations"]{if let Some(w)=app.get_webview_window(label){let _=w.destroy();}}let _=app.emit_to("recorder","halo://recorder-closed",());cancel_area(&app);if let Some(w)=app.get_webview_window("recorder"){let _=w.hide();}
- tauri::async_runtime::spawn_blocking(move||{let _op=OP.lock().unwrap();stop_preview();if let Some(mut job)=SESSION.lock().unwrap().take(){if let Some(mut r)=job.running.take(){r.stop.store(true,Ordering::Relaxed);let _=r.child.kill();let _=r.child.wait();if let Some(pointer)=r.pointer{let _=pointer.join();}for track in r.audio{let _=track.join.join();}}}*STATE.lock().unwrap()=Some(State{phase:"idle".into(),..Default::default()});}).await.map_err(|e|e.to_string())?;Ok(())
+ tauri::async_runtime::spawn_blocking(move||{let _op=OP.lock().unwrap();stop_preview();if let Some(mut job)=SESSION.lock().unwrap().take(){if let Some(mut r)=job.running.take(){r.stop.store(true,Ordering::Relaxed);let _=r.child.kill();let _=r.child.wait();if let Some(pointer)=r.pointer{let _=pointer.join();}for track in r.audio{let _=export::join_audio(track);}}}*STATE.lock().unwrap()=Some(State{phase:"idle".into(),..Default::default()});}).await.map_err(|e|e.to_string())?;Ok(())
 }
 #[tauri::command]pub async fn recorder_cancel(app:tauri::AppHandle)->Res<()> {cancel_recorder(app).await}
+#[tauri::command]pub async fn recorder_close(app:tauri::AppHandle)->Res<()> {
+ let state=recorder_state();
+ if !matches!(state.phase.as_str(),"idle"|"saving"|"exporting"){return cancel_recorder(app).await;}
+ let _=app.emit_to("recorder","halo://recorder-closed",());cancel_area(&app);if let Some(w)=app.get_webview_window("recorder"){let _=w.hide();}
+ if state.phase!="saving"{let mut current=STATE.lock().unwrap();if current.as_ref().map(|s|(&s.phase,s.project_path.as_ref()))==Some((&state.phase,state.project_path.as_ref())){*current=Some(State{phase:"idle".into(),..Default::default()});}}
+ recorder_preview_stop().await?;Ok(())
+}
 
 #[tauri::command]pub async fn recorder_toggle_audio(kind:String,enabled:bool)->Res<()> {
  if !["microphone","system"].contains(&kind.as_str()){return Err("Choose microphone or system audio.".into());}
  tauri::async_runtime::spawn_blocking(move||{let _op=OP.lock().unwrap();let mut guard=SESSION.lock().unwrap();let job=guard.as_mut().ok_or("No recording is active.")?;let mic=kind=="microphone";let muted=if mic{job.mic_muted.clone()}else{job.sys_muted.clone()};muted.store(!enabled,Ordering::Relaxed);
- if enabled{if let Some(running)=job.running.as_mut(){if !running.audio.iter().any(|track|track.mic==mic){let index=job.segments.len();let path=job.dir.join(format!("{}-{index}.wav",if mic{"mic"}else{"system"}));let track=crate::recorder_audio::start(path,mic,job.config.microphone_id.clone(),running.stop.clone(),running.gate.clone(),if mic{job.mic_peak.clone()}else{job.sys_peak.clone()},muted.clone())?;running.audio.push(track);}}}
+ let capture=project::assets_dir(job);
+ if enabled{if let Some(running)=job.running.as_mut(){if !running.audio.iter().any(|track|track.mic==mic){let index=job.segments.len();let path=capture.join(format!("{}-{index}.wav",if mic{"mic"}else{"system"}));let track=crate::recorder_audio::start(path,mic,job.config.microphone_id.clone(),running.stop.clone(),running.gate.clone(),if mic{job.mic_peak.clone()}else{job.sys_peak.clone()},muted.clone())?;running.audio.push(track);}}}
  if mic{job.config.microphone=enabled;}else{job.config.system_audio=enabled;}Ok(())}).await.map_err(|e|e.to_string())?
 }
 
@@ -404,7 +528,7 @@ if let Some(w)=app.get_webview_window("recorder-annotations"){w.set_ignore_curso
  }
  if last_position.elapsed()<Duration::from_millis(150){continue;}last_position=Instant::now();let bounds={let guard=SESSION.lock().unwrap();let Some(job)=guard.as_ref()else{break};if job.target.mode=="window"{window_rect(job.target.window).ok()}else{None}};if let Some(bounds)=bounds{if window.outer_position().ok()!=Some(PhysicalPosition::new(bounds.x,bounds.y)){let _=window.set_position(PhysicalPosition::new(bounds.x,bounds.y));}}}});Ok(())}
 #[tauri::command]pub async fn recorder_annotation_snapshot()->Res<String>{let(target,r)={let guard=SESSION.lock().unwrap();let job=guard.as_ref().ok_or("No recording is active.")?;(job.target.clone(),job.bounds)};tauri::async_runtime::spawn_blocking(move||{let dir=crate::system::tools_dir().join("recorder-cache");let path=dir.join(format!("annotation-source-{}.png",chrono::Local::now().timestamp_millis()));let source=if target.mode=="window"{format!("gfxcapture=hwnd={}:capture_cursor=0",target.window)}else{format!("gfxcapture=hmonitor={}:capture_cursor=0",target.monitor)};let mut c=ffmpeg();c.args(["-f","lavfi","-i",&source,"-frames:v","1","-vf"]);let crop=if target.mode=="area"{let area=target.rect.unwrap();format!("hwdownload,format=bgra,crop={}:{}:{}:{}",r.w,r.h,area.x,area.y)}else{"hwdownload,format=bgra".into()};c.arg(crop).arg(&path);run(c)?;Ok(format!("data:image/png;base64,{}",base64::engine::general_purpose::STANDARD.encode(fs::read(path).map_err(|e|e.to_string())?)))}).await.map_err(|e|e.to_string())?}
-#[tauri::command]pub fn recorder_output_info()->Res<serde_json::Value>{let state=recorder_state();let path=state.output.ok_or("No recording has been saved.")?;let metadata=fs::metadata(&path).map_err(|e|e.to_string())?;Ok(serde_json::json!({"path":path,"original_path":state.original_output,"duration":state.elapsed,"bytes":metadata.len()}))}
+#[tauri::command]pub fn recorder_output_info()->Res<serde_json::Value>{let state=recorder_state();let path=state.output.ok_or("No recording has been saved.")?;let metadata=fs::metadata(&path).map_err(|e|e.to_string())?;Ok(serde_json::json!({"path":path,"original_path":state.original_output,"project_path":state.project_path,"duration":state.elapsed,"bytes":metadata.len()}))}
 #[tauri::command]pub async fn recorder_recycle_output()->Res<()> {let path=recorder_state().output.ok_or("No recording has been saved.")?;tauri::async_runtime::spawn_blocking(move||crate::process::recycle_recording(Path::new(&path))).await.map_err(|e|e.to_string())?}
 
 fn log_error(message:&str){let dir=crate::system::tools_dir().join("recorder-cache");let _=fs::create_dir_all(&dir);if let Ok(mut file)=fs::OpenOptions::new().create(true).append(true).open(dir.join("diagnostics.log")){let _=writeln!(file,"{} {}",chrono::Local::now().to_rfc3339(),message);}}

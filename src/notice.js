@@ -119,14 +119,15 @@ function render(n) {
     };
     hideAfter = 6000;
   } else if (n.kind === "busy") {
+    const initial = Math.max(0, Math.min(1, Number(n.pct) || 0));
     const thumb = n.thumb ? `<div class="thumb" style="background-image:url('${n.thumb}')"></div>` : `<div class="thumb glyph-only">${DOC_GLYPH}</div>`;
     el.innerHTML = `
       <div class="busy ${n.indeterminate ? "indeterminate" : ""}">
         <div class="progress-head">
           ${thumb}<div class="label">${esc(n.title)}<span title="${esc(n.file || "")}">${esc(n.file || "Working on your files")}</span></div>
-          <span id="pct">${n.indeterminate ? "" : "0%"}</span>
+          <span id="pct">${n.indeterminate ? "" : `${Math.round(initial * 100)}%`}</span>
         </div>
-        <div class="progress-track" role="progressbar" aria-label="${esc(n.title)}" aria-valuemin="0" aria-valuemax="100" ${n.indeterminate ? "" : 'aria-valuenow="0"'}><div class="progress-fill" id="bar"></div></div>
+        <div class="progress-track" role="progressbar" aria-label="${esc(n.title)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(initial * 100)}"><div class="progress-fill" id="bar" style="transform:scaleX(${initial})"></div></div>
         <div class="progress-footer"><div class="sizes" id="sizes">${esc(n.total || "")}</div>
           <button class="btn pill" id="cancel">Cancel</button></div>
       </div>`;
@@ -202,6 +203,19 @@ function render(n) {
 }
 
 listen("halo://notice", ({ payload }) => render(payload));
+listen("halo://operation-finished", ({ payload }) => { if (cards.has(payload.opId)) render(payload); });
+listen("halo://operation-state", ({ payload: n }) => {
+  const card = cards.get(n.opId), busy = card?.el.querySelector('.busy');
+  if (!busy) return;
+  busy.classList.toggle('indeterminate', !!n.indeterminate);
+  const label = busy.querySelector('.label');
+  if (label?.firstChild) label.firstChild.textContent = n.title;
+  const progress = Math.max(0, Math.min(1, Number(n.pct) || 0));
+  busy.querySelector('#pct').textContent = n.indeterminate ? '' : `${Math.round(progress * 100)}%`;
+  const bar = busy.querySelector('#bar');bar.style.transform = `scaleX(${progress})`;
+  bar.parentElement.setAttribute('aria-valuenow', String(Math.round(progress * 100)));
+  if (n.cancelling) { const button = busy.querySelector('#cancel');button.textContent = 'Cancelling…';button.disabled = true; }
+});
 
 // Live progress for the notification card it belongs to.
 listen("halo://progress", ({ payload }) => {

@@ -119,9 +119,9 @@ const HOLD_SLOP: i32 = 24;
 /// One in-flight compress/convert/resize job. Each gets its own cancel flag and PID so operations
 /// running at the same time can't cancel or clobber one another.
 pub struct OpEntry {
-    cancel: AtomicBool,
+    cancel: Arc<AtomicBool>,
     pid: Mutex<Option<u32>>,
-    label: String,
+    label: Mutex<String>,
     /// The last notice payload shown for this job, so the tray can bring it back after it's dismissed.
     last_notice: Mutex<Option<serde_json::Value>>,
 }
@@ -133,6 +133,8 @@ pub struct Shared {
     /// Every operation currently running, keyed by the id the frontend made up for it.
     operations: Mutex<HashMap<String, Arc<OpEntry>>>,
     tray: Mutex<Option<TrayIcon<tauri::Wry>>>,
+    process_menu: Mutex<Option<Menu<tauri::Wry>>>,
+    process_items: Mutex<HashMap<String,MenuItem<tauri::Wry>>>,
     hold_ms: AtomicU64,
     shortcut: Mutex<String>,
     /// "wheel" or "menu": how the widget looks when a file is held.
@@ -156,6 +158,8 @@ const DEFAULT_SHORTCUT: &str = "ctrl+alt+KeyH";
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Settings {
+    #[serde(default = "yes")]
+    auto_updates: bool,
     hold_ms: u64,
     startup: bool,
     shortcut: String,
@@ -448,10 +452,20 @@ fn cancel_op(shared: &Arc<Shared>, op_id: &str) {
 
 /// Rebuilds the tray menu's "Running" submenu from whatever operations are currently in flight.
 fn rebuild_tray_menu(app: &AppHandle, shared: &Arc<Shared>) {
-    let guard = shared.tray.lock().unwrap();
-    let Some(tray) = guard.as_ref() else { return };
-    let mut ops: Vec<(String, String)> = shared.operations.lock().unwrap().iter().map(|(id, e)| (id.clone(), e.label.clone())).collect();
+    let app=app.clone();let shared=shared.clone();let dispatch=app.clone();
+    let _=dispatch.run_on_main_thread(move||rebuild_tray_menu_now(&app,&shared));
+}
+fn rebuild_tray_menu_now(app: &AppHandle, shared: &Arc<Shared>) {
+    // Never hold a Rust mutex while a native menu API may dispatch to the UI.
+    let tray=shared.tray.lock().unwrap().clone();
+    let Some(tray) = tray else { return };
+    let mut ops: Vec<(String, String)> = shared.operations.lock().unwrap().iter().map(|(id, e)| (id.clone(), e.label.lock().unwrap().clone())).collect();
     ops.sort();
+    let existing=shared.process_items.lock().unwrap().clone();
+    if shared.process_menu.lock().unwrap().is_some()&&existing.len()==ops.len()&&ops.iter().all(|(id,_)|existing.contains_key(id)){
+        for (id,label) in &ops{if let Some(item)=existing.get(id){let _=item.set_text(format!("⏳ {label}"));}}
+        return;
+    }
     let (Ok(hint), Ok(record), Ok(open), Ok(settings), Ok(quit)) = (
         MenuItem::with_id(app, "hint", "Hold a file, or use your shortcut", false, None::<&str>),
         MenuItem::with_id(app, "record", "Record screen", true, None::<&str>),
@@ -463,17 +477,13 @@ fn rebuild_tray_menu(app: &AppHandle, shared: &Arc<Shared>) {
         .iter()
         .filter_map(|(id, label)| MenuItem::with_id(app, format!("show_op:{id}"), format!("⏳ {label}"), true, None::<&str>).ok())
         .collect();
-    let menu = if running.is_empty() {
-        Menu::with_items(app, &[&open, &record, &settings, &hint, &quit])
-    } else {
-        let refs: Vec<&dyn IsMenuItem<tauri::Wry>> = running.iter().map(|i| i as &dyn IsMenuItem<tauri::Wry>).collect();
-        match Submenu::with_items(app, format!("Running ({})", running.len()), true, &refs) {
-            Ok(sub) => Menu::with_items(app, &[&open, &record, &settings, &sub, &hint, &quit]),
-            Err(_) => Menu::with_items(app, &[&open, &record, &settings, &hint, &quit]),
-        }
-    };
+    let empty=MenuItem::with_id(app,"no_processes","No processes running",false,None::<&str>).ok();
+    let mut refs:Vec<&dyn IsMenuItem<tauri::Wry>>=running.iter().map(|i|i as &dyn IsMenuItem<tauri::Wry>).collect();
+    if refs.is_empty(){if let Some(item)=&empty{refs.push(item);}}
+    let menu=match Submenu::with_items(app,format!("Processes ({})",running.len()),true,&refs){Ok(sub)=>Menu::with_items(app,&[&open,&record,&settings,&sub,&hint,&quit]),Err(_)=>Menu::with_items(app,&[&open,&record,&settings,&hint,&quit])};
+    let _=tray.set_tooltip(Some(format!("Halo · Processes: {}",running.len())));
     if let Ok(menu) = menu {
-        let _ = tray.set_menu(Some(menu));
+        match tray.set_menu(Some(menu.clone())){Ok(())=>{*shared.process_menu.lock().unwrap()=Some(menu);*shared.process_items.lock().unwrap()=ops.iter().zip(running.iter()).map(|((id,_),item)|(id.clone(),item.clone())).collect();},Err(error)=>eprintln!("Could not update Processes tray menu: {error}")}
     }
 }
 
@@ -485,7 +495,7 @@ async fn run_action(app: AppHandle, shared: State<'_, Arc<Shared>>, req: process
         hide_widget_inner(&app, &shared);
     }
     let op_id = req.op_id.clone();
-    let entry = Arc::new(OpEntry { cancel: AtomicBool::new(false), pid: Mutex::new(None), label: op_label(&req), last_notice: Mutex::new(None) });
+    let entry = Arc::new(OpEntry { cancel: Arc::new(AtomicBool::new(false)), pid: Mutex::new(None), label: Mutex::new(op_label(&req)), last_notice: Mutex::new(None) });
     if !op_id.is_empty() {
         shared.operations.lock().unwrap().insert(op_id.clone(), entry.clone());
         rebuild_tray_menu(&app, &shared);
@@ -517,8 +527,21 @@ async fn run_action(app: AppHandle, shared: State<'_, Arc<Shared>>, req: process
 }
 
 #[tauri::command]
-fn cancel_action(shared: State<'_, Arc<Shared>>, op_id: String) {
+fn cancel_action(app:AppHandle, shared: State<'_, Arc<Shared>>, op_id: String) {
+    if recorder::cancel_background(&app,&op_id){return;}
     cancel_op(shared.inner(), &op_id);
+}
+#[tauri::command]
+fn running_processes(shared:State<'_,Arc<Shared>>)->Vec<serde_json::Value>{let ops=shared.operations.lock().unwrap();let mut rows=ops.iter().map(|(id,entry)|serde_json::json!({"id":id,"label":entry.label.lock().unwrap().clone(),"notice":entry.last_notice.lock().unwrap().clone()})).collect::<Vec<_>>();rows.sort_by_key(|r|r["id"].as_str().unwrap_or_default().to_string());rows}
+#[tauri::command]
+fn show_process(app:AppHandle,shared:State<'_,Arc<Shared>>,op_id:String)->Result<(),String>{let notice=shared.operations.lock().unwrap().get(&op_id).and_then(|e|e.last_notice.lock().unwrap().clone()).ok_or("That process has finished.")?;std::thread::spawn(move||present_notice(&app,notice));Ok(())}
+#[tauri::command]
+async fn process_tray_state(shared:State<'_,Arc<Shared>>)->Result<serde_json::Value,String>{
+ let menu=shared.process_menu.lock().unwrap().clone();
+ tauri::async_runtime::spawn_blocking(move||{
+  fn tree(items:Vec<tauri::menu::MenuItemKind<tauri::Wry>>)->Result<Vec<serde_json::Value>,String>{items.into_iter().map(|item|match item{tauri::menu::MenuItemKind::Submenu(sub)=>Ok(serde_json::json!({"text":sub.text().map_err(|e|e.to_string())?,"items":tree(sub.items().map_err(|e|e.to_string())?)?})),tauri::menu::MenuItemKind::MenuItem(item)=>Ok(serde_json::json!({"id":item.id().as_ref(),"text":item.text().map_err(|e|e.to_string())?})),_=>Ok(serde_json::Value::Null)}).collect()}
+  menu.map(|menu|tree(menu.items().map_err(|e|e.to_string())?)).transpose().map(|items|serde_json::json!(items.unwrap_or_default()))
+ }).await.map_err(|e|e.to_string())?
 }
 
 #[tauri::command]
@@ -795,6 +818,7 @@ fn set_startup(on: bool) -> Result<(), String> {
 #[tauri::command]
 fn get_settings(shared: State<'_, Arc<Shared>>) -> Settings {
     Settings {
+        auto_updates: updates::enabled(),
         hold_ms: shared.hold_ms.load(Ordering::Relaxed),
         startup: startup_enabled(),
         shortcut: shared.shortcut.lock().unwrap().clone(),
@@ -811,6 +835,7 @@ fn get_settings(shared: State<'_, Arc<Shared>>) -> Settings {
 
 #[tauri::command]
 fn set_settings(app: AppHandle, shared: State<'_, Arc<Shared>>, settings: Settings) -> Result<(), String> {
+    updates::set_enabled(&app, settings.auto_updates)?;
     let hold = settings.hold_ms.clamp(200, 1500);
     shared.hold_ms.store(hold, Ordering::Relaxed);
 
@@ -840,7 +865,7 @@ fn set_settings(app: AppHandle, shared: State<'_, Arc<Shared>>, settings: Settin
         }
         let shortcut = shared.shortcut.lock().unwrap().clone();
         let style = shared.style.lock().unwrap().clone();
-        let _ = std::fs::write(path, serde_json::json!({ "hold_ms": hold, "shortcut": shortcut, "style": style, "share": shared.share.lock().unwrap().clone(), "notifications": settings.notifications, "ctrl_click": settings.ctrl_click, "tray_on_close": settings.tray_on_close, "save_mode": shared.save_mode.lock().unwrap().clone() }).to_string());
+        let _ = std::fs::write(path, serde_json::json!({ "auto_updates": settings.auto_updates, "hold_ms": hold, "shortcut": shortcut, "style": style, "share": shared.share.lock().unwrap().clone(), "notifications": settings.notifications, "ctrl_click": settings.ctrl_click, "tray_on_close": settings.tray_on_close, "save_mode": shared.save_mode.lock().unwrap().clone() }).to_string());
     }
     if settings.context_menu != context_menu_enabled() {
         if !settings.context_menu && sparse_installed() {
@@ -1097,7 +1122,7 @@ fn handle_cli(app: &AppHandle, args: &[String]) -> bool {
 
 #[tauri::command]
 fn quit_app(app: AppHandle) {
-    if recorder::active(){tauri::async_runtime::spawn(async move {let _=recorder::recorder_stop(app.clone()).await;app.exit(0);});}else{app.exit(0);}
+    tauri::async_runtime::spawn(async move {if recorder::active(){let _=recorder::recorder_stop(app.clone()).await;}let shutdown=app.clone();let _=tauri::async_runtime::spawn_blocking(move||recorder::shutdown_background(&shutdown)).await;app.exit(0);});
 }
 
 fn main() {
@@ -1178,18 +1203,18 @@ fn main() {
             recorder::recorder_annotation_update,recorder::recorder_annotations_flushed,recorder::recorder_log_error,recorder::recorder_countdown_open,recorder::recorder_countdown_data,recorder::recorder_countdown_ready,recorder::recorder_close_countdown,recorder::recorder_cancel_countdown,recorder::recorder_window_thumbnail,recorder::recorder_annotation_ready,recorder::recorder_annotation_input,recorder::recorder_annotation_data,recorder::recorder_annotation_add,recorder::recorder_annotation_end,recorder::recorder_annotations_edit,recorder::recorder_annotation_snapshot,recorder::recorder_annotation_forward_wheel,recorder::recorder_output_info,recorder::recorder_recycle_output,recorder::recorder_click_preview, recorder::recorder_cursor_preview, recorder::recorder_toggle_audio, recorder::recorder_preview_start, recorder::recorder_preview_stop, recorder::recorder_state,
             recorder::recorder_select_area,recorder::recorder_default_config,
             recorder::recorder_selection_data,
-            recorder::recorder_cancel, recorder::recorder_cancel_area, recorder::recorder_commit_area,
+            recorder::recorder_cancel, recorder::recorder_close, recorder::recorder_cancel_area, recorder::recorder_commit_area,
             recorder::recorder_start,
             recorder::recorder_pause,
             recorder::recorder_resume,
-            recorder::recorder_stop,
+            recorder::recorder_stop, recorder::recorder_jobs, recorder::recorder_cancel_export, recorder::recorder_open_project,
             hide_widget,
             set_typing,
             thumbnail,
             run_action,
             get_presets,
             save_presets,
-            cancel_action,
+            cancel_action, running_processes, show_process, process_tray_state,
             open_path,
             reveal_path,
             copy_files,
@@ -1223,6 +1248,8 @@ fn main() {
                 selector: Mutex::new(None),
                 operations: Mutex::new(HashMap::new()),
                 tray: Mutex::new(None),
+                process_menu: Mutex::new(None),
+                process_items: Mutex::new(HashMap::new()),
                 hold_ms: AtomicU64::new(DEFAULT_HOLD_MS),
                 shortcut: Mutex::new(DEFAULT_SHORTCUT.to_string()),
                 style: Mutex::new("wheel".to_string()),
@@ -1241,6 +1268,7 @@ fn main() {
                 .and_then(|p| std::fs::read_to_string(p).ok())
                 .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
             {
+                updates::load_preference(saved["auto_updates"].as_bool().unwrap_or(true));
                 if let Some(ms) = saved["hold_ms"].as_u64() {
                     shared.hold_ms.store(ms.clamp(200, 1500), Ordering::Relaxed);
                 }
@@ -1270,6 +1298,7 @@ fn main() {
             updates::start(app.handle().clone());
 
             ensure_notice(app.handle());
+            system::start_setup(app.handle().clone());
 
             // Launching Halo by hand opens its window; starting with Windows (--hidden) stays in the tray.
             let args: Vec<String> = std::env::args().collect();
@@ -1315,11 +1344,7 @@ fn main() {
                 .on_menu_event(|app, event| {
                     let id = event.id().as_ref();
                     if let Some(op_id) = id.strip_prefix("show_op:") {
-                        let shared = app.state::<Arc<Shared>>().inner().clone();
-                        let notice = shared.operations.lock().unwrap().get(op_id).and_then(|e| e.last_notice.lock().unwrap().clone());
-                        if let Some(notice) = notice {
-                            present_notice(app, notice);
-                        }
+                        let _=show_process(app.clone(),app.state::<Arc<Shared>>(),op_id.to_string());
                         return;
                     }
                     match id {
@@ -1337,6 +1362,7 @@ fn main() {
                 })
                 .build(app)?;
             *shared.tray.lock().unwrap() = Some(tray);
+            rebuild_tray_menu(app.handle(),&shared);
 
             // `HALO_DEMO=<file>` opens the wheel on that file in the middle of the primary screen.
             if let Ok(file) = std::env::var("HALO_DEMO") {
@@ -1358,7 +1384,7 @@ fn main() {
         .on_window_event(|window, event| {
             // Closing the widget only hides it; Halo keeps running in the tray.
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label()=="recorder"{api.prevent_close();let app=window.app_handle().clone();tauri::async_runtime::spawn(async move{let _=recorder::cancel_recorder(app).await;});return;}
+                if window.label()=="recorder"{api.prevent_close();let app=window.app_handle().clone();tauri::async_runtime::spawn(async move{let _=recorder::recorder_close(app).await;});return;}
                 if window.label()=="recorder-countdown"{api.prevent_close();recorder::cancel_countdown(window.app_handle());return;}
                 if window.label()=="recorder-selector"{api.prevent_close();recorder::cancel_area(window.app_handle());return;}
                 if window.label()=="recorder-test"{return;}
@@ -1387,3 +1413,13 @@ fn main() {
 
 
 #[cfg(test)]mod hit_region_tests{use super::*;#[test]fn wheel_corner_dismisses_but_centre_does_not(){let r=HitRegion{x:10.,y:20.,w:320.,h:320.,round:true};assert!(r.contains(170.,180.));assert!(!r.contains(12.,22.));assert!(!r.contains(5.,180.));}#[test]fn menu_rect_keeps_actions_interactive(){let r=HitRegion{x:28.,y:28.,w:184.,h:310.,round:false};assert!(r.contains(28.,28.));assert!(r.contains(200.,320.));assert!(!r.contains(220.,320.));}}
+
+#[cfg(test)]mod automatic_update_settings_tests{
+ use super::*;
+ #[test]fn existing_settings_default_to_automatic_updates_and_preserve_an_explicit_opt_out(){
+  let legacy=serde_json::json!({"hold_ms":250,"startup":false,"shortcut":"ctrl+alt+KeyH","context_menu":false,"style":"wheel"});
+  let settings:Settings=serde_json::from_value(legacy.clone()).unwrap();assert!(settings.auto_updates);
+  let mut disabled=legacy;disabled["auto_updates"]=serde_json::json!(false);
+  let settings:Settings=serde_json::from_value(disabled).unwrap();assert!(!settings.auto_updates);assert_eq!(serde_json::to_value(settings).unwrap()["auto_updates"],false);
+ }
+}

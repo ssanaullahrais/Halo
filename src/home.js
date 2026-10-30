@@ -1,6 +1,7 @@
 import "@fontsource-variable/inter";
 import './update-ui.js';
 import {createElement,Clapperboard,Globe,FileText,Wifi,ImagePlus,ChevronDown,Check,Info,RefreshCw,Sun,CloudUpload,Monitor,MousePointer2,Orbit,File,CircleDot,Menu,Grid2X2,Shield,PanelTop,MousePointerClick,Bell,Pencil,RotateCcw} from "lucide";
+import {listen} from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -24,6 +25,7 @@ const PROVIDER_LOGO = {
 const DEFAULTS = {
   hold_ms: 250,
   startup: false,
+  auto_updates: true,
   shortcut: "ctrl+alt+KeyH",
   context_menu: false,
   native_context_menu: false,
@@ -144,6 +146,7 @@ function refresh() {
   $("hold").value = draft.hold_ms;
   paintRange();
   $("startup").checked = draft.startup;
+  $("autoUpdates").checked = draft.auto_updates;
   $("tray").checked = draft.tray_on_close;
   $("ctx").checked = draft.context_menu;
   $("ctxHint").textContent = draft.native_context_menu ? "Adds Halo to the main Windows 11 right-click menu." : 'Adds Halo under "Show more options" in Explorer.';
@@ -186,7 +189,7 @@ $("hoverOpen").addEventListener("change", () => {
   say("");
   refresh();
 });
-for (const [id, key] of [["startup", "startup"], ["tray", "tray_on_close"], ["ctx", "context_menu"], ["notify", "notifications"], ["ctrlclick", "ctrl_click"]]) {
+for (const [id, key] of [["autoUpdates", "auto_updates"], ["startup", "startup"], ["tray", "tray_on_close"], ["ctx", "context_menu"], ["notify", "notifications"], ["ctrlclick", "ctrl_click"]]) {
   $(id).addEventListener("change", () => {
     draft[key] = $(id).checked;
     say("");
@@ -256,20 +259,22 @@ function renderChecks(list) {
   const icons={ffmpeg:Clapperboard,edge:Globe,pdfium:FileText,internet:Wifi,imagemagick:ImagePlus};
   const expanded = new Set([...$("checks").querySelectorAll('details[open]')].map(el=>el.dataset.check));
   $("checks").innerHTML = list.map(c=>{
-    const busy=installing.has(c.id);
+    const busy=installing.has(c.id)||c.installing;
     const button=c.fix?`<button class="fix" data-fix="${c.id}" ${busy?'disabled':''}>${busy?'Installing…':esc(c.fix)}</button>`:'';
-    return `<details class="check ${c.ok?'':'bad'}" data-check="${c.id}" ${expanded.has(c.id)?'open':''}><summary><span class="check-icon check-icon-${c.id}">${icon(icons[c.id]||Info)}</span><div class="label"><strong>${esc(c.name)}</strong><span>${esc(c.purpose)}</span><span class="state">${icon(c.ok?Check:Info)}${c.ok?'Ready':'Needs setup'} · ${esc(c.detail)}</span></div><span class="check-badge"><i></i>${c.ok?'Ready':'Needs setup'}</span><span class="check-chevron">${icon(ChevronDown)}</span></summary><div class="check-details"><span>${esc(c.detail)}</span>${button}</div></details>`;
+    return `<details class="check ${c.ok?'':'bad'}" data-check="${c.id}" ${expanded.has(c.id)?'open':''}><summary><span class="check-icon check-icon-${c.id}">${icon(icons[c.id]||Info)}</span><div class="label"><strong>${esc(c.name)}</strong><span>${esc(c.purpose)}</span><span class="state">${icon(c.ok?Check:Info)}${busy?'Installing…':c.ok?'Ready':'Needs setup'} · ${esc(c.detail)}</span></div><span class="check-badge"><i></i>${busy?'Installing…':c.ok?'Ready':'Needs setup'}</span><span class="check-chevron">${icon(ChevronDown)}</span></summary><div class="check-details"><span>${esc(c.detail)}</span>${button}</div></details>`;
   }).join('');
   const missing = list.filter((c) => !c.ok && !["internet","imagemagick"].includes(c.id)).length;
-  $("systemSummary").textContent=missing?'Some required components need setup.':'All required components are ready.';
-  $("systemSummaryDetail").textContent=missing?'Expand the highlighted items to see the available setup actions.':'Halo is ready to run on your system.';
+  const settingUp=list.some(c=>c.installing);
+  $("systemSummary").textContent=settingUp?'Installing missing components…':missing?'Some required components need setup.':'All required components are ready.';
+  $("systemSummaryDetail").textContent=settingUp?'Setup runs automatically in the background.':missing?'Missing components install automatically. Expand an item for details or retry.':'Halo is ready to run on your system.';
   const pill = $("status");
   pill.classList.toggle("warn-pill", missing > 0);
   const words = missing > 0 ? `${missing} ${missing === 1 ? "item needs" : "items need"} setup. Click to see.` : "Running in the tray";
   pill.querySelector("b").textContent = words;
   pill.title = words;
 }
-let requirementsRequest = null;
+let requirementsRequest = null,requirementsPending=false;
+listen("halo://requirements-changed",()=>{if(requirementsRequest)requirementsPending=true;else refreshChecks();}).catch(console.error);
 function refreshChecks() {
   if (requirementsRequest) return requirementsRequest;
   const button = $("recheck"), label = $("recheckLabel");
@@ -296,6 +301,7 @@ function refreshChecks() {
       button.removeAttribute("aria-busy");
       label.textContent = "Check again";
       requirementsRequest = null;
+      if(requirementsPending){requirementsPending=false;setTimeout(refreshChecks,0);}
     }
   })();
   return requirementsRequest;

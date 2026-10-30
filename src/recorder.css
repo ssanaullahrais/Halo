@@ -92,3 +92,28 @@
    panes retain their own scrolling; the native surface never shows scrollbars. */
 html,body{width:100%;height:100%;overflow:hidden!important;scrollbar-width:none;background:transparent}
 html::-webkit-scrollbar,body::-webkit-scrollbar{display:none;width:0;height:0}
+
+.record-dot[data-state=exporting] svg{animation:record-saving-spin .85s linear infinite;fill:none}
+@media(prefers-reduced-motion:reduce){.record-dot[data-state=exporting] svg{animation:none}}
+
+#recorderResult .saved-recording-actions #openOriginal,#recorderResult .saved-recording-actions #cancelExport{height:34px;padding:0 10px;background:#e3edfb;color:#315984}
+
+#recorderResult[data-result-state=exporting] #savedRecordingIcon{color:#086aff}
+#recorderResult[data-result-state=original] #savedRecordingIcon{color:#b56a13}
+
+#micToggle,#systemToggle{position:relative}
+#micToggle:not(.muted)>svg,#systemToggle:not(.muted)>svg{width:18px;height:18px;transform:translateY(-3px)}
+.audio-wave{position:absolute;left:6px;right:6px;bottom:3px;height:7px;display:flex;align-items:flex-end;justify-content:center;gap:2px;pointer-events:none;color:currentColor}
+.audio-wave i{display:block;width:2px;height:calc(1px + 6px * var(--audio-level,0));border-radius:2px;background:currentColor;transform:scaleY(var(--wave-scale));transform-origin:bottom;transition:height .12s ease-out}
+.muted .audio-wave{display:none}
+.audio-live .audio-wave{color:#00a76f}
+@media(prefers-reduced-motion:reduce){.audio-wave i{transition:none}}
+
+#recorderResult .saved-recording-actions #cancelExport{margin-left:auto}
+
+#sourceMenu .project-open{display:flex;align-items:center;gap:8px;width:100%;padding:10px 8px;margin-top:6px;border-top:1px solid #d7e4f3;border-radius:0;color:#315984;font-size:12px}
+#sourceMenu .project-open svg{width:17px;height:17px}
+#recorderResult .saved-recording-actions #exportAgain{width:34px;height:34px;padding:0;border-radius:9px;color:#315984;background:#e3edfb}
+#recorderResult .saved-recording-actions #exportAgain svg{width:16px;height:16px}
+
+#finishRecorder.saving{width:136px;min-width:136px}

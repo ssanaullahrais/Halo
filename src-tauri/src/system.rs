@@ -1,9 +1,10 @@
-//! Checks that the programs Halo relies on are present, and installs the missing ones with one click.
+//! Detects dependencies and installs missing components in a startup worker.
 
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
+use tauri::Emitter;
 
 use serde::Serialize;
 
@@ -18,6 +19,8 @@ pub struct Check {
     pub detail: String,
     /// Label of the one-click fix, when there is one.
     pub fix: Option<&'static str>,
+    pub installing: bool,
+    pub install_error: Option<String>,
 }
 
 fn run(program: &str, args: &[&str]) -> Option<String> {
@@ -163,7 +166,7 @@ pub fn checks() -> Vec<Check> {
     let have_winget = winget_ok();
     let via_winget = if have_winget { Some("Install") } else { None };
 
-    vec![
+    let mut list=vec![
         Check {
             id: "ffmpeg",
             name: "FFmpeg",
@@ -174,6 +177,7 @@ pub fn checks() -> Vec<Check> {
                 (Some(p), None) => p.display().to_string(),
                 _ => if have_winget { "Not installed".into() } else { "Not installed, and Windows Package Manager is missing".into() },
             },
+            installing:false,install_error:None,
             fix: if ffmpeg.is_some() { None } else { via_winget },
         },
         Check {
@@ -182,6 +186,7 @@ pub fn checks() -> Vec<Check> {
             purpose: "Turn Word, text and web documents into PDFs.",
             ok: edge_path().is_some(),
             detail: if edge_path().is_some() { "Installed".into() } else { "Not installed".into() },
+            installing:false,install_error:None,
             fix: if edge_path().is_some() { None } else { via_winget },
         },
         Check {
@@ -190,6 +195,7 @@ pub fn checks() -> Vec<Check> {
             purpose: "Turn PDF pages into pictures and read their text.",
             ok: pdfium_found().is_some(),
             detail: if pdfium_found().is_some() { "Included with Halo".into() } else { "Missing".into() },
+            installing:false,install_error:None,
             fix: if pdfium_found().is_some() { None } else { Some("Download") },
         },
         Check {
@@ -198,6 +204,7 @@ pub fn checks() -> Vec<Check> {
             purpose: "Upload files and get links.",
             ok: internet,
             detail: if internet { "Connected".into() } else { "Can't reach the upload services".into() },
+            installing:false,install_error:None,
             fix: None,
         },
         Check {
@@ -206,13 +213,17 @@ pub fn checks() -> Vec<Check> {
             purpose: "Convert PSD, PSB, TGA, DDS and EXR images. Source files stay unchanged.",
             ok: crate::capabilities::image_engine_path().is_some(),
             detail: if crate::capabilities::image_engine_path().is_some() { "Installed".into() } else { "Optional engine not installed".into() },
+            installing:false,install_error:None,
             fix: if crate::capabilities::image_engine_path().is_some() {None} else {Some("Install")},
         },
-    ]
+    ];
+    let states=INSTALL_STATES.lock().unwrap();
+    for check in &mut list{if let Some((_,state))=states.iter().find(|(id,_)|id==check.id){check.installing=state.running;if !check.ok{check.install_error=state.error.clone();if let Some(error)=&state.error{check.detail=error.clone();}}}}
+    list
 }
 
 /// Runs the one-click fix for a check. Blocking: call it from a worker thread.
-pub fn install(id: &str) -> Result<String, String> {
+fn install_inner(id: &str) -> Result<String, String> {
     match id {
         "imagemagick" => {
             use sha2::{Digest, Sha256};
@@ -372,4 +383,55 @@ fn install_with_winget(id: &str, package: &str) -> Result<String, String> {
         let tail: String = text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("The installer didn't finish.").chars().take(140).collect();
         Err(format!("Installing didn't finish: {tail}"))
     }
+}
+
+#[derive(Clone)]struct InstallState{running:bool,error:Option<String>}
+static INSTALL_STATES:Mutex<Vec<(String,InstallState)>>=Mutex::new(Vec::new());
+static INSTALL_LOCK:Mutex<()>=Mutex::new(());
+
+fn present(id:&str)->bool{
+ match id{"ffmpeg"=>find_ffmpeg().is_some(),"edge"=>edge_path().is_some(),"pdfium"=>pdfium_found().is_some(),"imagemagick"=>crate::capabilities::image_engine_path().is_some(),_=>false}
+}
+fn install_state(id:&str,running:bool,error:Option<String>,app:Option<&tauri::AppHandle>){
+ let mut states=INSTALL_STATES.lock().unwrap();let next=InstallState{running,error};
+ if let Some((_,state))=states.iter_mut().find(|(key,_)|key==id){*state=next;}else{states.push((id.into(),next));}
+ drop(states);if let Some(app)=app{let _=app.emit("halo://requirements-changed",());}
+}
+pub fn install(id:&str)->Result<String,String>{install_notifying(id,None)}
+fn install_notifying(id:&str,app:Option<&tauri::AppHandle>)->Result<String,String>{
+ // Automatic startup and a manual retry share the same lock and recheck after
+ // acquiring it, so they never launch duplicate installers.
+ let _lock=INSTALL_LOCK.lock().unwrap();
+ if present(id){return Ok("Already installed.".into());}
+ install_state(id,true,None,app);
+ let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+  install_inner(id)?;
+  if present(id){Ok("Installed.".into())}else{Err("The installer finished, but this component is still unavailable. Try again from System.".into())}
+ })).unwrap_or_else(|_|Err("Component setup stopped unexpectedly. Try again from System.".into()));
+ install_state(id,false,result.as_ref().err().cloned(),app);result
+}
+
+fn setup_missing(checks:Vec<Check>,mut install:impl FnMut(&str)->Result<String,String>)->Vec<(String,Result<String,String>)>{
+ checks.into_iter().filter(|check|!check.ok&&matches!(check.id,"ffmpeg"|"edge"|"pdfium"|"imagemagick")).map(|check|(check.id.into(),install(check.id))).collect()
+}
+pub fn start_setup(app:tauri::AppHandle){
+ std::thread::spawn(move||{
+  // Dependency setup also prevents the app updater from replacing a running
+  // installer. The app and tray remain responsive throughout setup.
+  let Ok(_job)=crate::updates::job()else{return;};
+  let results=setup_missing(checks(),|id|install_notifying(id,Some(&app)));
+  for (id,result) in results{if let Err(error)=result{eprintln!("Halo component setup ({id}): {error}");}}
+  let _=app.emit("halo://requirements-changed",());
+ });
+}
+
+#[cfg(test)]mod setup_tests{
+ use super::*;
+ fn check(id:&'static str,ok:bool,fix:Option<&'static str>)->Check{Check{id,name:id,purpose:"test",ok,detail:String::new(),fix,installing:false,install_error:None}}
+ #[test]fn startup_skips_ready_and_non_installable_items_and_continues_after_failure(){
+  let mut calls=Vec::new();
+  let results=setup_missing(vec![check("ffmpeg",true,None),check("internet",false,None),check("edge",false,None),check("pdfium",false,Some("Download")),check("imagemagick",false,Some("Install"))],|id|{calls.push(id.to_string());if id=="edge"{Err("Windows Package Manager unavailable".into())}else{Ok("Installed".into())}});
+  assert_eq!(calls,vec!["edge","pdfium","imagemagick"]);assert!(results[0].1.is_err());assert!(results[1].1.is_ok());assert!(results[2].1.is_ok());
+ }
+ #[test]fn healthy_startup_never_runs_an_installer(){let results=setup_missing(vec![check("ffmpeg",true,None),check("edge",true,None)],|_|panic!("ready components must not be installed"));assert!(results.is_empty());}
 }

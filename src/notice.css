@@ -331,6 +331,10 @@ body {
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
 }
+.card[data-id^="recording-"] .busy .sizes {
+  font-size: 12px;
+  line-height: 1.25;
+}
 .btn.pill {
   height: 32px;
   font-size: 15px;
