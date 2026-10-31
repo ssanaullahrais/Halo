@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.5 — 2026-10-31
+
+- Reworked the Cursor settings tab: fixed missing labels and spacing bugs, split Cursor Motion and Click Effect into their own cards, and moved keystroke options into Behaviour.
+- Smart Zoom now sets sensible defaults on enable (1.75x strength, manual control and live preview off) instead of leaving them as they were.
+- Click Effect is on by default at Strong intensity.
+- Quieted the Smart Zoom interaction sound.
+
 ## 0.3.4 — 2026-10-30
 
 - Save the original recording promptly while rendering frames, backgrounds, cursor effects and annotations separately.
