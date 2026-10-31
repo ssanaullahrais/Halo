@@ -10,7 +10,7 @@ pub fn devices()->Vec<(String,String)> {
     collection.into_iter().filter_map(|d|{let d=d.ok()?;Some((d.get_id().ok()?,d.get_friendlyname().ok()?))}).collect()
 }
 pub fn start(path:PathBuf,mic:bool,device_id:String,stop:Arc<AtomicBool>,gate:Arc<Mutex<Option<Instant>>>,peak:Arc<AtomicU32>,mute:Arc<AtomicBool>)->Result<AudioTrack,String> {
-    let (tx,rx)=mpsc::sync_channel(1);let output=path.clone();let cancel=stop.clone();
+    let (tx,rx)=mpsc::sync_channel(1);let output=path.clone();let cancel=Arc::new(AtomicBool::new(false));let cancelled=cancel.clone();
     let join=thread::spawn(move||{
         let diagnostic=output.with_extension("log");let mark=|stage:&str|{let _=std::fs::write(&diagnostic,stage);};
         let result=(||->Result<(),Box<dyn std::error::Error>>{
@@ -20,13 +20,14 @@ pub fn start(path:PathBuf,mic:bool,device_id:String,stop:Arc<AtomicBool>,gate:Ar
             mark("Selecting device");let device=if mic&&!device_id.is_empty(){enumerator.get_device(&device_id)?}else{enumerator.get_default_device(&if mic{Direction::Capture}else{Direction::Render})?};
             mark("Activating audio client");let mut client=device.get_iaudioclient()?;
             let format=client.get_mixformat()?;let rate=format.get_samplespersec();let channels=format.get_nchannels();let bytes=(format.get_bitspersample()/8) as usize;let block=format.get_blockalign() as usize;let float=matches!(format.get_subformat()?,SampleType::Float);
+            if !(1..=4).contains(&bytes)||(float&&bytes!=4)||channels==0||block!=bytes*channels as usize{return Err("Unsupported audio device sample format.".into());}
             let (_,minimum)=client.get_device_period()?;
             mark("Initializing audio stream");client.initialize_client(&format,&Direction::Capture,&StreamMode::EventsShared{autoconvert:false,buffer_duration_hns:minimum})?;
             mark("Getting audio event");let event=client.set_get_eventhandle()?;let capture=client.get_audiocaptureclient()?;
             let mut writer=hound::WavWriter::create(&output,hound::WavSpec{channels,sample_rate:rate,bits_per_sample:32,sample_format:hound::SampleFormat::Float})?;
             mark("Starting audio stream");client.start_stream()?;mark("Capturing");let _=tx.send(Ok(()));
             let mut queue=VecDeque::new();let mut written=0u64;
-            while !stop.load(Ordering::Relaxed) {
+            while !stop.load(Ordering::Relaxed)&&!cancelled.load(Ordering::Relaxed) {
                 capture.read_from_device_to_deque(&mut queue)?;
                 let elapsed=gate.lock().unwrap().map(|t|t.elapsed());
                 if let Some(elapsed)=elapsed {
@@ -54,7 +55,7 @@ pub fn start(path:PathBuf,mic:bool,device_id:String,stop:Arc<AtomicBool>,gate:Ar
 
 /// Live settings meters use the same device-native format without writing audio to disk.
 pub fn meter(mic:bool,device_id:String,stop:Arc<AtomicBool>,peak:Arc<AtomicU32>)->Result<AudioTrack,String>{
- let(tx,rx)=mpsc::sync_channel(1);let cancel=stop.clone();
+ let(tx,rx)=mpsc::sync_channel(1);let cancel=Arc::new(AtomicBool::new(false));let cancelled=cancel.clone();
  let join=thread::spawn(move||{
   let result=(||->Result<(),Box<dyn std::error::Error>>{
    initialize_sta().ok()?;let enumerator=DeviceEnumerator::new()?;
@@ -63,7 +64,7 @@ pub fn meter(mic:bool,device_id:String,stop:Arc<AtomicBool>,peak:Arc<AtomicU32>)
    if !(1..=4).contains(&bytes){return Err("Unsupported audio device sample format.".into());}
    let(_,minimum)=client.get_device_period()?;client.initialize_client(&format,&Direction::Capture,&StreamMode::EventsShared{autoconvert:false,buffer_duration_hns:minimum})?;
    let event=client.set_get_eventhandle()?;let capture=client.get_audiocaptureclient()?;client.start_stream()?;let _=tx.send(Ok(()));let mut queue=VecDeque::new();let mut held=0f32;
-   while !stop.load(Ordering::Relaxed){capture.read_from_device_to_deque(&mut queue)?;let mut level=0f32;while queue.len()>=bytes{let mut data=[0u8;4];for value in data.iter_mut().take(bytes){*value=queue.pop_front().unwrap();}let sample=if float&&bytes==4{f32::from_le_bytes(data)}else{match bytes{1=>(data[0]as f32-128.)/128.,2=>i16::from_le_bytes([data[0],data[1]])as f32/32768.,3=>i32::from_le_bytes([0,data[0],data[1],data[2]])as f32/2147483648.,4=>i32::from_le_bytes(data)as f32/2147483648.,_=>0.}};if sample.is_finite(){level=level.max(sample.abs());}}held=level.max(held*0.9);peak.store(held.min(1.).to_bits(),Ordering::Relaxed);let _=event.wait_for_event(20);}
+   while !stop.load(Ordering::Relaxed)&&!cancelled.load(Ordering::Relaxed){capture.read_from_device_to_deque(&mut queue)?;let mut level=0f32;while queue.len()>=bytes{let mut data=[0u8;4];for value in data.iter_mut().take(bytes){*value=queue.pop_front().unwrap();}let sample=if float&&bytes==4{f32::from_le_bytes(data)}else{match bytes{1=>(data[0]as f32-128.)/128.,2=>i16::from_le_bytes([data[0],data[1]])as f32/32768.,3=>i32::from_le_bytes([0,data[0],data[1],data[2]])as f32/2147483648.,4=>i32::from_le_bytes(data)as f32/2147483648.,_=>0.}};if sample.is_finite(){level=level.max(sample.abs());}}held=level.max(held*0.9);peak.store(held.min(1.).to_bits(),Ordering::Relaxed);let _=event.wait_for_event(20);}
    client.stop_stream()?;Ok(())
   })().map_err(|e|format!("{} audio preview: {e}",if mic{"Microphone"}else{"System"}));peak.store(0,Ordering::Relaxed);if let Err(e)=&result{let _=tx.try_send(Err(e.clone()));}result
  });

@@ -2,6 +2,6 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Permissions for the Halo wheel and home windows",
-  "windows": ["main", "home", "notice", "recorder", "recorder-selector", "recorder-test", "recorder-countdown", "recorder-annotations"],
+  "windows": ["main", "home", "notice", "recorder", "recorder-selector", "recorder-test", "recorder-countdown", "recorder-annotations", "recorder-zoom-preview"],
   "permissions": ["core:default", "core:window:allow-set-size", "core:window:allow-set-position", "core:window:allow-show", "core:window:allow-hide", "core:window:allow-close", "core:window:allow-start-dragging"]
 }

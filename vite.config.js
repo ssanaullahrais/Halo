@@ -10,7 +10,7 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     rollupOptions: {
-      input: { main: resolve(__dirname, "index.html"), home: resolve(__dirname, "home.html"), notice: resolve(__dirname, "notice.html"), recorder:resolve(__dirname,"recorder.html"), selection:resolve(__dirname,"recorder-select.html"),countdown:resolve(__dirname,"recorder-countdown.html"),annotations:resolve(__dirname,"recorder-annotations.html") },
+      input: { main: resolve(__dirname, "index.html"),zoomPreview:resolve(__dirname,"recorder-zoom-preview.html"), home: resolve(__dirname, "home.html"), notice: resolve(__dirname, "notice.html"), recorder:resolve(__dirname,"recorder.html"), selection:resolve(__dirname,"recorder-select.html"),countdown:resolve(__dirname,"recorder-countdown.html"),annotations:resolve(__dirname,"recorder-annotations.html") },
     },
   },
 });

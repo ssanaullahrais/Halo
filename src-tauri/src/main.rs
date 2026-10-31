@@ -665,6 +665,7 @@ fn open_home(app: &AppHandle) {
         .unwrap_or(820.0);
     let _ = tauri::WebviewWindowBuilder::new(&app, "home", tauri::WebviewUrl::App("home.html".into()))
         .title("Halo")
+        .theme(Some(tauri::Theme::Light))
         .inner_size(1000.0, height)
         .resizable(false)
         .maximizable(false)
@@ -1200,7 +1201,7 @@ fn main() {
             recorder::recorder_options,
             recorder::recorder_save_config,
             recorder::recorder_pick_folder,
-            recorder::recorder_annotation_update,recorder::recorder_annotations_flushed,recorder::recorder_log_error,recorder::recorder_countdown_open,recorder::recorder_countdown_data,recorder::recorder_countdown_ready,recorder::recorder_close_countdown,recorder::recorder_cancel_countdown,recorder::recorder_window_thumbnail,recorder::recorder_annotation_ready,recorder::recorder_annotation_input,recorder::recorder_annotation_data,recorder::recorder_annotation_add,recorder::recorder_annotation_end,recorder::recorder_annotations_edit,recorder::recorder_annotation_snapshot,recorder::recorder_annotation_forward_wheel,recorder::recorder_output_info,recorder::recorder_recycle_output,recorder::recorder_click_preview, recorder::recorder_cursor_preview, recorder::recorder_toggle_audio, recorder::recorder_preview_start, recorder::recorder_preview_stop, recorder::recorder_state,
+            recorder::recorder_annotation_update,recorder::recorder_annotations_flushed,recorder::recorder_log_error,recorder::recorder_countdown_open,recorder::recorder_countdown_data,recorder::recorder_countdown_ready,recorder::recorder_close_countdown,recorder::recorder_cancel_countdown,recorder::recorder_window_thumbnail,recorder::recorder_annotation_ready,recorder::recorder_annotation_input,recorder::recorder_annotation_data,recorder::recorder_annotation_add,recorder::recorder_annotation_end,recorder::recorder_annotations_edit,recorder::recorder_annotation_snapshot,recorder::recorder_annotation_forward_wheel,recorder::recorder_output_info,recorder::recorder_recycle_output,recorder::recorder_click_preview, recorder::recorder_cursor_preview, recorder::recorder_toggle_audio, recorder::recorder_preview_start, recorder::recorder_preview_stop, recorder::recorder_zoom_preview_frame, recorder::recorder_zoom_preview_hide, recorder::recorder_state,
             recorder::recorder_select_area,recorder::recorder_default_config,
             recorder::recorder_selection_data,
             recorder::recorder_cancel, recorder::recorder_close, recorder::recorder_cancel_area, recorder::recorder_commit_area,

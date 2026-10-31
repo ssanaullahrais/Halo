@@ -181,6 +181,11 @@ pub fn checks() -> Vec<Check> {
             fix: if ffmpeg.is_some() { None } else { via_winget },
         },
         Check {
+            id:"recorder_runtime",name:"Recording engine",purpose:"Reliable screen recording, including static windows.",
+            ok:crate::recorder::runtime::ready(),detail:if crate::recorder::runtime::ready(){"Ready".into()}else{"Recording engine needs setup".into()},
+            fix:if crate::recorder::runtime::ready(){None}else{Some("Download")},installing:false,install_error:None,
+        },
+        Check {
             id: "edge",
             name: "Microsoft Edge",
             purpose: "Turn Word, text and web documents into PDFs.",
@@ -225,6 +230,7 @@ pub fn checks() -> Vec<Check> {
 /// Runs the one-click fix for a check. Blocking: call it from a worker thread.
 fn install_inner(id: &str) -> Result<String, String> {
     match id {
+        "recorder_runtime" => crate::recorder::runtime::install(),
         "imagemagick" => {
             use sha2::{Digest, Sha256};
             use std::io::Read;
@@ -390,7 +396,7 @@ static INSTALL_STATES:Mutex<Vec<(String,InstallState)>>=Mutex::new(Vec::new());
 static INSTALL_LOCK:Mutex<()>=Mutex::new(());
 
 fn present(id:&str)->bool{
- match id{"ffmpeg"=>find_ffmpeg().is_some(),"edge"=>edge_path().is_some(),"pdfium"=>pdfium_found().is_some(),"imagemagick"=>crate::capabilities::image_engine_path().is_some(),_=>false}
+ match id{"recorder_runtime"=>crate::recorder::runtime::ready(),"ffmpeg"=>find_ffmpeg().is_some(),"edge"=>edge_path().is_some(),"pdfium"=>pdfium_found().is_some(),"imagemagick"=>crate::capabilities::image_engine_path().is_some(),_=>false}
 }
 fn install_state(id:&str,running:bool,error:Option<String>,app:Option<&tauri::AppHandle>){
  let mut states=INSTALL_STATES.lock().unwrap();let next=InstallState{running,error};
@@ -412,7 +418,7 @@ fn install_notifying(id:&str,app:Option<&tauri::AppHandle>)->Result<String,Strin
 }
 
 fn setup_missing(checks:Vec<Check>,mut install:impl FnMut(&str)->Result<String,String>)->Vec<(String,Result<String,String>)>{
- checks.into_iter().filter(|check|!check.ok&&matches!(check.id,"ffmpeg"|"edge"|"pdfium"|"imagemagick")).map(|check|(check.id.into(),install(check.id))).collect()
+ checks.into_iter().filter(|check|!check.ok&&matches!(check.id,"ffmpeg"|"edge"|"pdfium"|"imagemagick"|"recorder_runtime")).map(|check|(check.id.into(),install(check.id))).collect()
 }
 pub fn start_setup(app:tauri::AppHandle){
  std::thread::spawn(move||{

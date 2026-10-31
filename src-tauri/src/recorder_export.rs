@@ -19,10 +19,10 @@ impl Control{
  pub(super) fn encoding(&self,value:f64){self.set_progress(value);let _=self.stage().compare_exchange(2,3,Ordering::Relaxed,Ordering::Relaxed);}
  pub(super) fn snapshot(&self)->(u32,f64){(self.stage().load(Ordering::Relaxed),self.progress().load(Ordering::Relaxed)as f64/100.)}
  fn priority(&self,progress:bool)->u32{
-  use windows::Win32::System::Threading::{ABOVE_NORMAL_PRIORITY_CLASS,BELOW_NORMAL_PRIORITY_CLASS};
+  use windows::Win32::System::Threading::{NORMAL_PRIORITY_CLASS,BELOW_NORMAL_PRIORITY_CLASS};
   if !progress{return 0;}
   let capture=self.0.is_some()&&STATE.try_lock().map(|s|s.as_ref().map(|s|matches!(s.phase.as_str(),"preparing"|"recording"|"resuming"|"pausing"|"saving")).unwrap_or(false)).unwrap_or(true);
-  if capture{BELOW_NORMAL_PRIORITY_CLASS.0}else{ABOVE_NORMAL_PRIORITY_CLASS.0}
+  if capture{BELOW_NORMAL_PRIORITY_CLASS.0}else{NORMAL_PRIORITY_CLASS.0}
  }
  fn track(&self,child:&Child,add:bool){if let Some(c)=&self.0{use std::os::windows::io::AsHandle;let mut children=c.children.lock().unwrap();if add{if let Ok(handle)=child.as_handle().try_clone_to_owned(){children.insert(child.id(),handle);}}else{children.remove(&child.id());}}}
  pub(super) fn terminate_children(&self){if let Some(c)=&self.0{use std::os::windows::io::AsRawHandle;for handle in c.children.lock().unwrap().values(){unsafe{let _=windows::Win32::System::Threading::TerminateProcess(windows::Win32::Foundation::HANDLE(handle.as_raw_handle()),1);}}}}
@@ -82,15 +82,18 @@ fn preparation_units(job:&Session,parts:&[render::Part<'_>])->usize{
 }
 pub(super) struct PreparationProgress{completed:AtomicUsize,total:usize,control:Control}
 impl PreparationProgress{
- pub(super) fn new(job:&Session,parts:&[render::Part<'_>],control:Control)->Self{control.set_stage(1);Self{completed:AtomicUsize::new(0),total:preparation_units(job,parts),control}}
+ pub(super) fn new(job:&Session,parts:&[render::Part<'_>],control:Control,extra:usize)->Self{control.set_stage(1);Self{completed:AtomicUsize::new(0),total:preparation_units(job,parts)+extra,control}}
  pub(super) fn advance(&self){let completed=self.completed.fetch_add(1,Ordering::Relaxed)+1;self.control.progress().fetch_max((10000.*completed as f64/self.total.max(1)as f64).min(10000.)as u32,Ordering::Relaxed);}
  pub(super) fn complete(&self){debug_assert_eq!(self.completed.load(Ordering::Relaxed),self.total,"all visual preparation must report progress");self.control.set_progress(100.);}
  pub(super) fn cancelled(&self)->bool{self.control.cancelled()}
 }
 
-pub(super) fn needs_render(job:&Session)->bool {
+pub(super) fn fade_enabled(enabled:bool,duration:f64)->bool{enabled&&duration>=10.}
+
+pub(super) fn needs_render(job:&Session)->bool {needs_video_render(job)||job.config.interaction_sounds||job.config.background_music}
+pub(super) fn needs_video_render(job:&Session)->bool {
  let c=&job.config;
- c.frame!="none"||c.resolution!="original"||project::cursor_effects(c)||!job.annotations.is_empty()
+ c.show_keystrokes||c.smart_zoom||fade_enabled(c.auto_fade,job.segments.iter().map(|s|s.duration).sum())||c.frame!="none"||c.resolution!="original"||project::cursor_effects(c)||!job.annotations.is_empty()
   ||job.segments.iter().any(|s|s.commands.exists())
 }
 
@@ -132,6 +135,9 @@ pub(super) fn run_command(command:std::process::Command,timeout:Option<Duration>
 
 fn run_supervised(command:std::process::Command,progress:Option<(f64,f64,f64)>,watchdog:Watchdog)->Res<()> {
  run_supervised_inner(command,progress,watchdog,None,None,Control::default())
+}
+pub(super) fn run_probe(command:std::process::Command,control:Control)->Res<()>{
+ run_supervised_inner(command,None,Watchdog{wall:Duration::from_secs(5),stall:Duration::from_secs(5)},None,None,control)
 }
 pub(super) fn run_render_command(mut command:std::process::Command,duration:f64,update:Arc<dyn Fn(f64)+Send+Sync>,abort:Arc<AtomicBool>,control:Control)->Res<()>{
  command.args(["-progress","pipe:1","-stats_period","0.1"]);
@@ -220,16 +226,23 @@ fn write_segments(paths:&[PathBuf],list:&Path,trim:Option<&[f64]>)->Res<()> {
  fs::write(list,text).map_err(|e|e.to_string())
 }
 
-pub(super) fn concat_delivery(paths:&[PathBuf],destination:&Path,list:&Path,duration:f64,from:f64,to:f64,audio:Option<&Path>,trim:Option<&[f64]>)->Res<()> {concat_delivery_controlled(paths,destination,list,duration,from,to,audio,trim,&Control::default())}
-pub(super) fn concat_delivery_controlled(paths:&[PathBuf],destination:&Path,list:&Path,duration:f64,from:f64,to:f64,audio:Option<&Path>,trim:Option<&[f64]>,control:&Control)->Res<()> {
+pub(super) fn concat_delivery(paths:&[PathBuf],destination:&Path,list:&Path,duration:f64,from:f64,to:f64,audio:Option<&Path>,trim:Option<&[f64]>)->Res<()> {concat_delivery_controlled(paths,destination,list,duration,from,to,audio,trim,false,&Control::default())}
+pub(super) fn concat_delivery_controlled(paths:&[PathBuf],destination:&Path,list:&Path,duration:f64,from:f64,to:f64,audio:Option<&Path>,trim:Option<&[f64]>,fade:bool,control:&Control)->Res<()> {
  if paths.is_empty(){return Err("No recording segments were captured.".into());}
  write_segments(paths,list,trim)?;
  atomic_mp4_controlled(destination,control,|temporary|{
   let mut command=ffmpeg();command.args(["-f","concat","-safe","0","-i"]).arg(list);
   if let Some(audio)=audio{command.arg("-i").arg(audio);}
-  command.args(["-map","0:v:0","-map",if audio.is_some(){"1:a?"}else{"0:a?"},"-c","copy","-t",&duration.to_string(),"-movflags","+faststart"]).arg(temporary);
+  command.args(["-map","0:v:0","-map",if audio.is_some(){"1:a?"}else{"0:a?"},"-c:v","copy"]);
+  if fade_enabled(fade,duration){let d=1f64;command.args(["-af",&format!("afade=t=in:st=0:d={d},afade=t=out:st={}:d={d}",(duration-d).max(d)),"-c:a","aac","-b:a","192k"]);}else{command.args(["-c:a","copy"]);}
+  command.args(["-t",&duration.to_string(),"-movflags","+faststart"]).arg(temporary);
   {command.args(["-progress","pipe:1","-stats_period","0.1"]);run_supervised_inner(command,Some((duration,from,to)),Watchdog::for_export(Some(duration),None),None,None,control.clone())}
  })
+}
+
+// One final audio encode mixes optional effects while copying rendered video.
+pub(super) fn concat_with_soundtrack(paths:&[PathBuf],destination:&Path,list:&Path,duration:f64,source:Option<&Path>,has_audio:bool,fx:&Path,fade:bool,control:&Control)->Res<()>{
+ write_segments(paths,list,None)?;atomic_mp4_controlled(destination,control,|temporary|{let mut cmd=ffmpeg();cmd.args(["-f","concat","-safe","0","-i"]).arg(list);let with_voice=has_audio&&source.is_some();if with_voice{cmd.arg("-i").arg(source.unwrap());}cmd.arg("-i").arg(fx);let mut filter=if with_voice{"[1:a]aresample=48000,asplit=2[voice][speech];[2:a]aresample=48000,lowpass=f=6500[fx];[fx][speech]sidechaincompress=threshold=0.025:ratio=5:attack=25:release=320:knee=4:makeup=1[ducked];[voice][ducked]amix=inputs=2:normalize=0,alimiter=limit=0.95:level=false:latency=true".to_string()}else{"[1:a]aresample=48000,lowpass=f=6500".to_string()};if fade_enabled(fade,duration){filter+=&format!(",afade=t=in:st=0:d=1,afade=t=out:st={}:d=1",(duration-1.).max(1.));}filter+="[audio]";cmd.args(["-filter_complex",&filter,"-map","0:v:0","-map","[audio]","-c:v","copy","-c:a","aac","-b:a","192k","-t",&duration.to_string(),"-movflags","+faststart"]).arg(temporary);cmd.args(["-progress","pipe:1","-stats_period","0.1"]);run_supervised_inner(cmd,Some((duration,0.,100.)),Watchdog::for_export(Some(duration),None),None,None,control.clone())})
 }
 
 pub(super) fn save_original(job:&Session,destination:&Path)->Res<()> {
@@ -335,4 +348,9 @@ pub(super) fn save_original(job:&Session,destination:&Path)->Res<()> {
   let dir=std::env::temp_dir().join(format!("halo-lock-timeout-{}",chrono::Local::now().timestamp_nanos_opt().unwrap()));fs::create_dir_all(&dir).unwrap();let source=dir.join("partial.mp4");fs::write(&source,b"finished video").unwrap();let lock=fs::OpenOptions::new().read(true).share_mode(0).open(&source).unwrap();let start=Instant::now();
   assert!(publish_mp4(&source,&dir.join("final.mp4"),Duration::from_millis(200)).is_err());assert!(start.elapsed()<Duration::from_secs(1));drop(lock);assert_eq!(fs::read(&source).unwrap(),b"finished video");fs::remove_dir_all(dir).unwrap();
  }
+}
+
+#[cfg(test)]mod fade_policy_tests{
+ use super::*;
+ #[test]fn fades_require_ten_seconds_and_an_enabled_setting(){for duration in [0.,1.,3.,9.99]{assert!(!fade_enabled(true,duration));}for duration in [10.,10.01,60.]{assert!(fade_enabled(true,duration));assert!(!fade_enabled(false,duration));}}
 }

@@ -337,6 +337,29 @@ pub(crate) fn write_pdf(img: &DynamicImage, out: &Path) -> Result<(), String> {
     fs::write(out, buf).map_err(err)
 }
 
+/// Flat RGB PSD with an optional alpha channel, using standard planar raw pixels.
+fn write_psd(img:&DynamicImage,out:&Path)->Result<(),String>{
+ let (w,h)=(img.width(),img.height());if w>30000||h>30000{return Err("PSD supports dimensions up to 30,000 pixels.".into());}
+ let rgba=img.to_rgba8();let channels=if rgba.pixels().any(|p|p[3]!=255){4u16}else{3};
+ let mut file=std::io::BufWriter::new(fs::File::create(out).map_err(err)?);
+ file.write_all(b"8BPS\0\x01\0\0\0\0\0\0").map_err(err)?;
+ file.write_all(&channels.to_be_bytes()).map_err(err)?;file.write_all(&h.to_be_bytes()).map_err(err)?;file.write_all(&w.to_be_bytes()).map_err(err)?;
+ file.write_all(&[0,8,0,3]).map_err(err)?;file.write_all(&[0;8]).map_err(err)?;
+ if channels==4{
+  // A negative layer count marks the merged fourth channel as transparency.
+  let pixels=w.checked_mul(h).ok_or("PSD dimensions overflow")?;let info=2+16+2+4*6+12+4+12+4*(pixels+2);let padded=info+(info%2);
+  file.write_all(&(padded+8).to_be_bytes()).map_err(err)?;file.write_all(&padded.to_be_bytes()).map_err(err)?;file.write_all(&(-1i16).to_be_bytes()).map_err(err)?;
+  file.write_all(&[0;8]).map_err(err)?;file.write_all(&h.to_be_bytes()).map_err(err)?;file.write_all(&w.to_be_bytes()).map_err(err)?;file.write_all(&4u16.to_be_bytes()).map_err(err)?;
+  for id in [0i16,1,2,-1]{file.write_all(&id.to_be_bytes()).map_err(err)?;file.write_all(&(pixels+2).to_be_bytes()).map_err(err)?;}
+  file.write_all(b"8BIMnorm\xff\0\x08\0").map_err(err)?;file.write_all(&12u32.to_be_bytes()).map_err(err)?;file.write_all(&[0;12]).map_err(err)?;
+  for c in 0..4{file.write_all(&[0;2]).map_err(err)?;let plane:Vec<u8>=rgba.pixels().map(|p|p[c]).collect();file.write_all(&plane).map_err(err)?;}
+  if info%2!=0{file.write_all(&[0]).map_err(err)?;}file.write_all(&[0;4]).map_err(err)?;
+ }else{file.write_all(&[0;4]).map_err(err)?;}
+ file.write_all(&[0;2]).map_err(err)?;
+ // Photoshop stores the merged RGB preview over white; the layer itself keeps straight alpha.
+ let merged=flatten(img);for c in 0..channels as usize{let plane:Vec<u8>=if c<3{merged.pixels().map(|p|p[c]).collect()}else{rgba.pixels().map(|p|p[3]).collect()};file.write_all(&plane).map_err(err)?;}file.flush().map_err(err)
+}
+
 fn quality_of(req: &Req) -> u8 {
     match req.option.as_str() {
         "small" => 55,
@@ -484,6 +507,10 @@ fn image_convert(path: &Path, req: &Req, rep: &dyn Fn(f64, u64)) -> Result<Done,
         return Err(format!("It's already a {}.", target.to_uppercase()));
     }
     rep(0.1, 0);
+    if ["psd","psb"].contains(&ext_lower(path).as_str()) && crate::capabilities::IMAGE_TARGETS.contains(&target) && req.preset.is_none(){
+        let images=crate::image_engine::artboards(path)?;
+        if !images.is_empty(){return crate::convert::save_pages(&images,&format!("{stem}-artboards"),&dir,target,rep);}
+    }
     let mut img = load(path)?;
     if let Some(preset)=&req.preset {
         if preset.scale!=100 {
@@ -512,6 +539,7 @@ fn image_convert(path: &Path, req: &Req, rep: &dyn Fn(f64, u64)) -> Result<Done,
             save(&img, Fmt::Webp, req.preset.as_ref().map(|p|p.quality).unwrap_or(90), &o)?;
             o
         }
+        "psd" => {let o=unique(&dir,&stem,"psd");write_psd(&img,&o)?;o}
         "pdf" => {
             let o = unique(&dir, &stem, "pdf");
             write_pdf(&img, &o)?;
@@ -1193,6 +1221,11 @@ pub fn run(req: &Req, ctx: &Ctx) -> Vec<Outcome> {
     if let Some(preset)=&req.preset {
         if let Err(message)=crate::presets::validate(preset) {return vec![Outcome{name:"Preset".into(),ok:false,message,out_path:None,before:0,after:0}];}
     }
+    if req.verb=="convert"&&req.option=="pdf_merge" {
+        let before=req.files.iter().map(|f|size_of(Path::new(f))).sum();
+        let result=crate::convert::merge_pdf(req,ctx);
+        return vec![match result{Ok(done)=>Outcome{name:"Merged PDF".into(),ok:true,before,after:done.out.as_deref().map(size_of).unwrap_or(0),message:done.message,out_path:done.out.map(|p|p.to_string_lossy().into_owned())},Err(message)=>Outcome{name:"Merged PDF".into(),ok:false,before,after:0,message,out_path:None}}];
+    }
     if let Some(done) = crate::folders::run(req, ctx) {
         return done;
     }
@@ -1384,6 +1417,8 @@ mod output_tests {
         fs::create_dir_all(&root).unwrap();
         root.join(name)
     }
+
+    #[test]#[ignore="requires optional image engine"]fn psd_output_roundtrips_rgb_and_alpha(){for alpha in [255,100]{let img=DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(32,24,image::Rgba([30,120,210,alpha])));let path=target(&format!("alpha-{alpha}.psd"));write_psd(&img,&path).unwrap();let decoded=load(&path).unwrap().to_rgba8();assert_eq!(decoded.dimensions(),(32,24));for (a,b) in decoded.get_pixel(8,8).0.iter().zip([30u8,120,210,alpha]){assert!(a.abs_diff(b)<=2,"{a} != {b}");}}}
 
     #[test]
     fn rgb_icons_can_be_reopened() {

@@ -117,7 +117,8 @@ pub fn format_options(path: &Path, verb: &str) -> Vec<&'static str> {
                 Kind::Image | Kind::Svg => {
                     out.extend_from_slice(IMAGE_TARGETS);
                     if gif { out.extend(["mp4","webm","mkv","mov","avi","ogv"]); }
-                    out.push("pdf");
+                    out.extend(["pdf","pdf_merge","psd"]);
+                    if kind == Kind::Svg {out.retain(|o|*o!="psd"&&*o!="pdf_merge");}
                     if kind == Kind::Image {
                         out.push("svg");
                     }
@@ -129,9 +130,7 @@ pub fn format_options(path: &Path, verb: &str) -> Vec<&'static str> {
                 Kind::Pdf | Kind::Doc => {
                     out.extend_from_slice(IMAGE_TARGETS);
                     out.extend(["txt", "docx", "html", "md"]);
-                    if kind == Kind::Doc {
-                        out.push("pdf");
-                    }
+                    if kind == Kind::Doc {out.push("pdf");}else{out.push("pdf_merge");}
                 }
                 Kind::Folder => {
                     out.extend_from_slice(IMAGE_TARGETS);

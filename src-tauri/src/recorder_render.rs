@@ -70,9 +70,14 @@ fn clone_command(source:&std::process::Command)->std::process::Command{
  let mut command=std::process::Command::new(source.get_program());command.args(source.get_args());command
 }
 
-// Some older NVIDIA drivers allow fewer concurrent encoding sessions. A worker
+// Hardware drivers can allow fewer concurrent encoding sessions. A worker
 // that encounters that limit retires; the remaining workers take its section.
-fn session_limit(error:&str)->bool{let e=error.to_ascii_lowercase();e.contains("nvenc")&&(e.contains("session")||e.contains("memory")||e.contains("resource")||e.contains("initializeencoder"))}
+fn session_limit(error:&str)->bool{
+ let e=error.to_ascii_lowercase();
+ (e.contains("nvenc")&&(e.contains("session")||e.contains("memory")||e.contains("resource")||e.contains("initializeencoder")))
+ ||(e.contains("qsv")&&["memory_alloc","device busy","resource","session limit"].iter().any(|s|e.contains(s)))
+ ||(e.contains("amf")&&["out_of_memory","no_free_surfaces","resource","session limit"].iter().any(|s|e.contains(s)))
+}
 
 pub(super) fn parallel(commands:Vec<(std::process::Command,f64,f64)>,workers:usize,total:f64,control:export::Control)->Res<()>{
  let originals=commands.iter().map(|(c,d,_)|(clone_command(c),*d)).collect::<Vec<_>>();
@@ -106,6 +111,10 @@ pub(super) fn parallel(commands:Vec<(std::process::Command,f64,f64)>,workers:usi
 
 #[cfg(test)]mod tests{
  use super::*;
+ #[test]fn hardware_resource_limits_reduce_workers_but_driver_absence_does_not(){
+  for error in ["[h264_nvenc] OpenEncodeSessionEx failed: out of memory","[h264_qsv] MFX_ERR_MEMORY_ALLOC","[h264_amf] AMF_OUT_OF_MEMORY","[h264_amf] AMF_NO_FREE_SURFACES"]{assert!(session_limit(error),"{error}");}
+  for error in ["[h264_qsv] Error creating a MFX session: unsupported","[h264_amf] DLL amfrt64.dll failed to open","No such filter"]{assert!(!session_limit(error),"{error}");}
+ }
  #[test]fn preparation_parallelism_uses_cores_without_exceeding_image_memory_budget(){
   let image=asset_bytes(r#"<svg width="1920" height="1080"><rect width="100%"/></svg>"#);assert_eq!(image,1920*1080*16);
   assert_eq!(asset_workers(4,4,Some(4*1024*1024*1024),image),4);

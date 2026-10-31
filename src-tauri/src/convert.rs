@@ -746,6 +746,30 @@ pub fn extract_images(path: &Path, rep: &dyn Fn(f64, u64)) -> Res<Done> {
     save_pages(&images, &format!("{stem}-images"), &dir, "png", rep)
 }
 
+/// Import PDF pages without rasterizing; image inputs become individual lossless pages.
+pub(crate) fn merge_pdf(req:&Req,ctx:&process::Ctx)->Res<Done>{
+ if req.files.len()<2{return Err("Select at least two PDFs or images to merge.".into());}
+ let engine=pdfium()?.lock().map_err(|_|"The PDF engine is busy.".to_string())?;
+ let mut merged=engine.create_new_pdf().map_err(pdf_error)?;
+ for (i,name) in req.files.iter().enumerate(){
+  if ctx.cancel.load(std::sync::atomic::Ordering::Relaxed){return Err("Cancelled".into());}
+  let path=Path::new(name);
+  match process::kind_of(path){
+   process::Kind::Pdf=>{let source=engine.load_pdf_from_file(path,None).map_err(pdf_error)?;merged.pages_mut().append(&source).map_err(pdf_error)?;},
+   process::Kind::Image=>{let img=process::load(path)?;let temporary=std::env::temp_dir().join(format!("halo-merge-{}-{i}-{}.pdf",std::process::id(),chrono::Local::now().timestamp_nanos_opt().unwrap_or_default()));
+    let result=(||{process::write_pdf(&img,&temporary)?;let source=engine.load_pdf_from_file(&temporary,None).map_err(pdf_error)?;merged.pages_mut().append(&source).map_err(pdf_error)})();let _=fs::remove_file(&temporary);result?;},
+   _=>return Err("PDF merge accepts PDFs and images.".into())
+  }
+  (ctx.report)((i+1)as f64/req.files.len()as f64*0.95,0);
+ }
+ if merged.pages().is_empty(){return Err("No pages to merge.".into());}
+ let (stem,dir)=process::stem_dir(Path::new(&req.files[0]));let out=process::unique(&dir,&format!("{stem}-merged"),"pdf");
+ let bytes=merged.save_to_bytes().map_err(pdf_error)?;
+ if ctx.cancel.load(std::sync::atomic::Ordering::Relaxed){return Err("Cancelled".into());}
+ let mut file=fs::OpenOptions::new().write(true).create_new(true).open(&out).map_err(err)?;file.write_all(&bytes).map_err(err)?;
+ (ctx.report)(1.,bytes.len()as u64);Ok(Done{out:Some(out),message:format!("{} pages merged in selection order",merged.pages().len())})
+}
+
 fn pdf_blocks(path: &Path) -> Res<Vec<Block>> {
     let pdfium = pdfium()?.lock().map_err(|_| "The PDF engine is busy.".to_string())?;
     let doc = pdfium.load_pdf_from_file(path, None).map_err(pdf_error)?;
@@ -765,7 +789,7 @@ fn pdf_blocks(path: &Path) -> Res<Vec<Block>> {
 }
 
 /// Saves each page as a picture: one file for a single page, otherwise a folder of numbered pictures.
-fn save_pages(images: &[DynamicImage], stem: &str, dir: &Path, target: &str, rep: &dyn Fn(f64, u64)) -> Res<Done> {
+pub(crate) fn save_pages(images: &[DynamicImage], stem: &str, dir: &Path, target: &str, rep: &dyn Fn(f64, u64)) -> Res<Done> {
     let ext = process::ext_for(target);
     if images.len() == 1 {
         let out = process::unique(dir, stem, ext);
@@ -881,4 +905,17 @@ fn svg_convert(path: &Path, target: &str, rep: &dyn Fn(f64, u64)) -> Res<Done> {
     }
     rep(1.0, process::size_of(&out));
     Ok(Done { out: Some(out), message: String::new() })
+}
+
+#[cfg(test)]mod merge_tests{
+ use super::*;
+ #[test]#[ignore="requires PDFium and local FFmpeg"]fn merge_and_extract_every_page_in_every_image_format(){
+ let dir=std::env::temp_dir().join(format!("halo-merge-test-{}",chrono::Local::now().timestamp_nanos_opt().unwrap()));fs::create_dir_all(&dir).unwrap();
+ let image=DynamicImage::ImageRgb8(image::RgbImage::from_pixel(96,64,image::Rgb([18,108,200])));let png=dir.join("image.png");image.save(&png).unwrap();let pdf=dir.join("source.pdf");process::write_pdf(&image,&pdf).unwrap();
+ let req=Req{files:vec![pdf.to_string_lossy().into_owned(),png.to_string_lossy().into_owned(),pdf.to_string_lossy().into_owned()],verb:"convert".into(),option:"pdf_merge".into(),value:None,value2:None,text:None,preset:None,op_id:String::new()};
+ let cancel=std::sync::atomic::AtomicBool::new(false);let pid=Mutex::new(None);let ctx=process::Ctx{cancel:&cancel,pid:&pid,report:&|_,_|{}};let result=process::run(&req,&ctx);assert!(result[0].ok,"{}",result[0].message);let merged=Path::new(result[0].out_path.as_ref().unwrap());let pages=pdf_pages(merged,&|_,_|{}).unwrap();assert_eq!(pages.len(),3);for page in &pages{assert_eq!((page.width(),page.height()),(96,64));}
+ for target in IMAGE_TARGETS{let done=pdf_convert(merged,target,&|_,_|{}).unwrap();let folder=done.out.unwrap();assert_eq!(fs::read_dir(&folder).unwrap().count(),3,"all pages for {target}");for entry in fs::read_dir(folder).unwrap(){let decoded=process::load(&entry.unwrap().path()).unwrap();assert!(decoded.width()>0);}}
+ let cancelled=std::sync::atomic::AtomicBool::new(true);let ctx=process::Ctx{cancel:&cancelled,pid:&pid,report:&|_,_|{}};assert!(merge_pdf(&req,&ctx).is_err());
+ println!("Merged PDFs and images, exported every page in 8 formats: {}",dir.display());
+ }
 }

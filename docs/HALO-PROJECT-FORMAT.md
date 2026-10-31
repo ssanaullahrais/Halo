@@ -115,3 +115,34 @@ Projects are ready to reopen after Finish or a completed pause checkpoint. An
 initial `recording` document with no completed segments is a draft, not a complete
 crash-recovery recording. This change prepares source data and recorder re-export;
 it does not implement the future video editor.
+
+## Optional camera context and cursor modes
+
+New cursor JSONL samples may contain a `context` object: focused/control bounds,
+coarse control kind, multiline flag, document-view generation and activity bits
+(typing/editing=1, Enter=2, Escape=4, Tab=8). There are no characters, key codes,
+control names, values or URLs in this metadata. Missing context remains valid.
+Bounds and categories are validated before planning.
+
+`render.cinematic_cursor` selects interaction-aware glides for normal recordings;
+`render.smooth_cursor` selects lighter smoothing. They are mutually exclusive.
+Smart Zoom always uses cinematic cursor processing independently of those normal
+recording preferences. `zoom_preview` is a local UI preference, not a render setting.
+
+
+Optional `render.interaction_sounds` and `render.background_music` booleans default
+to false on older projects. They affect styled delivery independently of Smart Zoom; source
+capture audio/video assets are not modified. All bundled audio works offline.
+
+
+`render.show_keystrokes` and `render.kenney_cursor` are optional booleans, default
+false. A segment may declare `keyboard_events` pointing to its conventional
+`.assets/keys-N.jsonl` file. Each event contains a monotonic segment-local `time`
+and one to five `keys` labels. They are display labels, not executable commands.
+Cursor shape IDs 0-12 represent arrow, hand, I-beam, horizontal/vertical/two
+diagonal/all-direction resize, wait, working, unavailable, crosshair and help.
+Older cursor events and project documents remain valid. Native-pointer-baked
+sources cannot acquire replacement cursor artwork after capture.
+
+`render.keystroke_theme` selects `dark` (default for older projects) or `light`
+raised glass key artwork. It does not affect input timing or cursor motion.

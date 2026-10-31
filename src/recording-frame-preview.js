@@ -13,16 +13,29 @@ export function recordingFrameGeometry(config,target,options){
  return {width,height,padding,canvasWidth:width+2*padding,canvasHeight:height+2*padding+40};
 }
 
+// Illustrations use a compact canvas so title bars and controls stay legible in a card.
+export function recordingFrameCardGeometry(config){return recordingFrameGeometry({...config,resolution:'original'},{mode:'screen',monitor:0},{monitors:[{id:0,w:320,h:200}],windows:[]});}
+
+export function recordingBackgroundArtwork(background,w,h,id='background'){
+ if(!Array.isArray(background))return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="${w}" height="${h}" fill="${/^#[0-9a-f]{6}$/i.test(background)?background:'#15213a'}"/></svg>`;
+ const darken=hex=>'#'+hex.slice(1).match(/../g).map(v=>Math.round(parseInt(v,16)*.84).toString(16).padStart(2,'0')).join(''),[a,b,c]=background.map(darken),x=(w-h)/4,y=-x,d=(w+h)/2,blur=Math.min(w,h)*.11;
+ return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><defs><linearGradient id="${id}-base" gradientUnits="userSpaceOnUse" x1="${x}" y1="${y}" x2="${x+d}" y2="${y+d}"><stop stop-color="${a}"/><stop offset=".55" stop-color="${b}"/><stop offset="1" stop-color="${c}"/></linearGradient><filter id="${id}-soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="${blur}"/></filter><radialGradient id="${id}-edge" cx=".5" cy=".45" r=".8"><stop offset=".3" stop-color="#080d22" stop-opacity="0"/><stop offset="1" stop-color="#080d22" stop-opacity=".24"/></radialGradient></defs><rect width="${w}" height="${h}" fill="url(#${id}-base)"/><g filter="url(#${id}-soft)"><ellipse cx="${w*.18}" cy="${h*.24}" rx="${w*.38}" ry="${h*.27}" fill="${background[0]}" opacity=".35"/><ellipse cx="${w*.82}" cy="${h*.74}" rx="${w*.43}" ry="${h*.3}" fill="${background[2]}" opacity=".3"/></g><rect width="${w}" height="${h}" fill="url(#${id}-edge)"/></svg>`;
+}
+
 export function recordingFrameArtwork(frame,geometry,background){
  const {width:w,height:h,padding:p,canvasWidth:W,canvasHeight:H}=geometry;
  const plain=frame==='none',x=plain?0:p,y=plain?0:p+40;
- const content=`<rect data-preview-content x="${x}" y="${y}" width="${w}" height="${h}" fill="#fdfdff"/><g transform="translate(${x} ${y})"><rect x="${w*.1}" y="${h*.18}" width="${w*.44}" height="${h*.08}" rx="${h*.04}" fill="${frame==='windows'?'#2a6fe8':'#c7d1ea'}"/><rect x="${w*.1}" y="${h*.4}" width="${w*.7}" height="${h*.06}" rx="${h*.03}" fill="#e1e7f4"/><rect x="${w*.1}" y="${h*.6}" width="${w*.55}" height="${h*.06}" rx="${h*.03}" fill="#e1e7f4"/></g>`;
- if(plain)return `<svg viewBox="0 0 ${w} ${h}" aria-hidden="true">${content}</svg>`;
+ // Apple mark from Simple Icons (CC0); Windows uses the four-pane mark.
+ const size=Math.min(w,h)*.28,cx=x+w/2,cyContent=y+h/2;
+ const mark=frame==='mac'?`<g data-card-logo="mac" transform="translate(${cx-size/2} ${cyContent-size/2}) scale(${size/24})" fill="#344054"><path d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701"/></g>`:frame==='windows'?`<g data-card-logo="windows" transform="translate(${cx-size/2} ${cyContent-size/2})" fill="#2878dd"><rect width="${size*.45}" height="${size*.45}" rx="${size*.025}"/><rect x="${size*.55}" width="${size*.45}" height="${size*.45}" rx="${size*.025}"/><rect y="${size*.55}" width="${size*.45}" height="${size*.45}" rx="${size*.025}"/><rect x="${size*.55}" y="${size*.55}" width="${size*.45}" height="${size*.45}" rx="${size*.025}"/></g>`:`<g data-card-logo="none"><circle cx="${cx}" cy="${cyContent}" r="${size*.65}" fill="#dce9ff"/><path d="M${cx-size*.2} ${cyContent-size*.32}L${cx+size*.32} ${cyContent}L${cx-size*.2} ${cyContent+size*.32}Z" fill="#3679df"/></g>`;
+ const content=`<rect data-preview-content="" x="${x}" y="${y}" width="${w}" height="${h}" fill="${plain?'#edf3fc':'#f8fbff'}"/>${mark}`;
+ if(plain)return `<svg viewBox="0 0 ${w} ${h}" aria-hidden="true"><rect x="1.5" y="1.5" width="${w-3}" height="${h-3}" rx="12" fill="#edf3fc" stroke="#cbd9ee" stroke-width="3"/>${mark}</svg>`;
+
  const right=w+p;
+ const radius=frame==='mac'?10:12,title=frame==='mac'?'#e8ecf4':'#f7f9fc',control=Math.min(w/6,46),cy=p+20,minimize=right-control*2.5,maximize=right-control*1.5,close=right-control*.5;
  const chrome=frame==='mac'?`<circle cx="${p+20}" cy="${p+20}" r="6" fill="#ff5f57"/><circle cx="${p+40}" cy="${p+20}" r="6" fill="#febc2e"/><circle cx="${p+60}" cy="${p+20}" r="6" fill="#28c840"/>`:
-  `<path d="M${Math.max(0,right-78)} ${p+19}h12 M${Math.max(0,right-48)} ${p+14}h10v10h-10z M${Math.max(0,right-20)} ${p+14}l10 10m0-10l-10 10" stroke="#253252" fill="none" stroke-width="1.3"/>`;
- // Background stops and the radial highlight use the same positions as background_svg.
- const bg=Array.isArray(background)?`<defs><linearGradient id="frame-${frame}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${background[0]}"/><stop offset=".55" stop-color="${background[1]}"/><stop offset="1" stop-color="${background[2]}"/></linearGradient><radialGradient id="light-${frame}" cx=".2" cy=".1" r=".8"><stop stop-color="#fff" stop-opacity=".28"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient></defs><rect width="${W}" height="${H}" fill="url(#frame-${frame})"/><rect width="${W}" height="${H}" fill="url(#light-${frame})"/>`:
-  `<rect width="${W}" height="${H}" fill="${/^#[0-9a-f]{6}$/i.test(background)?background:'#15213a'}"/>`;
- return `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">${bg}${content}<rect x="${p}" y="${p}" width="${w}" height="40" rx="10" fill="#e8ecf4"/><rect x="${p}" y="${p+20}" width="${w}" height="20" fill="#e8ecf4"/>${chrome}</svg>`;
+  `${w>=160?`<g fill="#3274e9"><rect x="${p+15}" y="${p+14}" width="5" height="5" rx=".6"/><rect x="${p+22}" y="${p+14}" width="5" height="5" rx=".6"/><rect x="${p+15}" y="${p+21}" width="5" height="5" rx=".6"/><rect x="${p+22}" y="${p+21}" width="5" height="5" rx=".6"/></g>`:''}<path d="M${minimize-5} ${cy}h10 M${maximize-4.5} ${cy-4.5}h9v9h-9z M${close-4.5} ${cy-4.5}l9 9m0-9l-9 9" stroke="#344054" fill="none" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/><path d="M${p} ${p+39.5}H${right}" stroke="#dde3ec" stroke-width="1"/><rect x="${p+.5}" y="${p+.5}" width="${w-1}" height="${h+39}" rx="11.5" fill="none" stroke="#cbd4e1" stroke-width="1"/>`;
+
+ const bg=recordingBackgroundArtwork(background,W,H,`frame-${frame}`);
+ return `<svg viewBox="0 0 ${W} ${H}" aria-hidden="true">${bg}<defs><clipPath id="window-${frame}"><rect x="${p}" y="${p}" width="${w}" height="${h+40}" rx="${radius}"/></clipPath></defs><g clip-path="url(#window-${frame})">${content}<rect x="${p}" y="${p}" width="${w}" height="40" rx="${radius}" fill="${title}"/><rect x="${p}" y="${p+20}" width="${w}" height="20" fill="${title}"/>${chrome}</g></svg>`;
 }

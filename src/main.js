@@ -267,6 +267,7 @@ function saveLast(p) {
 
 function options(verb) {
   const list = rawOptions(verb);
+  if(verb==="convert"&&S.files.length>1&&S.files.every(f=>["image","pdf"].includes(f.kind))){const placeholder=list.findIndex(o=>o.id==="none");if(placeholder>=0)list.splice(placeholder,1);list.unshift({id:"pdf_merge",title:"Merge to PDF",sub:"All pages in selection order",icon:"file"});}
   if (verb === "convert" && S.files.length && S.files.every(f => ["image","video","audio"].includes(f.kind))) {
     const current = f => ({jpeg:"jpg",jfif:"jpg",tif:"tiff"})[f.ext.toLowerCase()] || f.ext.toLowerCase();
     for (const p of conversionPresets) {
@@ -364,6 +365,7 @@ function rawOptions(verb, fs = S.files) {
           ["tiff", "TIFF", "For print and scans", "image"],
           ["gif", "GIF", "Simple pictures", "image"],
           ["ico", "ICO", "Icon, up to 256 px", "image"],
+          ["psd", "PSD", "Photoshop image", "image"],
           ["pdf", "PDF", "One page document", "file"],
           ["svg", "SVG", "Embedded in a vector file", "file"],
           ...(fs.every(f=>f.ext.toLowerCase()==="gif") ? [

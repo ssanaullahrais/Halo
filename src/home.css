@@ -1,4 +1,5 @@
 :root {
+  color-scheme: light;
   --bg: linear-gradient(160deg, #dfeaff 0%, #eef0ff 60%, #f3f0ff 100%);
   --side: rgba(255, 255, 255, 0.55);
   --card: #ffffff;
@@ -17,23 +18,6 @@
   --field: #f5f7fd;
   font-family: "Inter Variable", "Inter", "Segoe UI", system-ui, sans-serif;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: linear-gradient(160deg, #0c1120 0%, #121830 100%);
-    --side: rgba(255, 255, 255, 0.04);
-    --card: #182039;
-    --card-shadow: 0 6px 22px rgba(0, 0, 0, 0.35);
-    --line: #27315a;
-    --text: #f2f5ff;
-    --dim: #9ba7ca;
-    --track: #2b3558;
-    --tile: #212c52;
-    --tile-ink: #7fa6ff;
-    --kbd: #222c4d;
-    --field: #1d2744;
-  }
-}
-
 * {
   box-sizing: border-box;
 }
@@ -197,17 +181,6 @@ svg {
 .status.warn-pill i {
   background: #f5a524;
 }
-@media (prefers-color-scheme: dark) {
-  .status {
-    background: #173a2a;
-    color: #5fe08f;
-  }
-  .status.warn-pill {
-    background: #3b3015;
-    color: #ffd98a;
-  }
-}
-
 .pages {
   flex: 1;
   overflow-y: auto;
@@ -640,13 +613,6 @@ input[type="range"]::-webkit-slider-thumb {
   color: #8a5a00;
   background: #fff4d6;
 }
-@media (prefers-color-scheme: dark) {
-  .warn {
-    color: #ffd98a;
-    background: #3b3015;
-  }
-}
-
 /* system check */
 .check {
   display: flex;

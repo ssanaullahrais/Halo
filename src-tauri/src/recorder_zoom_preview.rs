@@ -1,0 +1,32 @@
+//! Small delayed preview fed from the existing capture graph, never a second WGC input.
+use super::*;
+use std::{collections::VecDeque,io::Read,sync::{OnceLock,atomic::AtomicU64}};
+static APP:OnceLock<tauri::AppHandle>=OnceLock::new();static EPOCH:AtomicU64=AtomicU64::new(0);static SEQUENCE:AtomicU64=AtomicU64::new(0);static VISIBLE:AtomicBool=AtomicBool::new(false);
+static LIVE:Mutex<Option<Live>>=Mutex::new(None);
+struct Live{epoch:u64,config:Config,bounds:Rect,samples:VecDeque<project::CursorSample>,packet:Option<serde_json::Value>}
+pub(super) fn init(app:tauri::AppHandle){let _=APP.set(app);}
+pub(super) fn begin(c:&Config,bounds:Rect)->Option<u64>{
+ if !c.smart_zoom||!c.zoom_preview{return None;}let app=APP.get()?;let (ow,oh)=encoder::output_size(c,bounds.w,bounds.h);let aspect=ow as f64/oh as f64;let video_width=(160.*aspect).clamp(180.,260.);let preview_width=video_width+16.;let preview_height=video_width/aspect+60.;let epoch=EPOCH.fetch_add(1,Ordering::Relaxed)+1;
+ let window=match app.get_webview_window("recorder-zoom-preview"){Some(w)=>w,None=>match tauri::WebviewWindowBuilder::new(app,"recorder-zoom-preview",tauri::WebviewUrl::App("recorder-zoom-preview.html".into())).title("Halo · Smart Zoom preview").inner_size(preview_width,preview_height).visible(false).focused(false).focusable(false).decorations(false).always_on_top(true).skip_taskbar(true).resizable(false).shadow(true).build(){Ok(w)=>w,Err(e)=>{log_error(&format!("Zoom preview unavailable: {e}"));return None;}}};
+ let _=window.set_size(tauri::LogicalSize::new(preview_width,preview_height));
+ let affinity=window.hwnd().map_err(|e|e.to_string()).and_then(|h|unsafe{SetWindowDisplayAffinity(HWND(h.0),WDA_EXCLUDEFROMCAPTURE)}.map_err(|e|e.to_string()));if let Err(e)=affinity{let _=window.hide();log_error(&format!("Zoom preview cannot be excluded from capture: {e}"));return None;}
+ if let Ok(monitors)=app.available_monitors(){if let Some(m)=monitors.iter().find(|m|{let p=m.position();bounds.x>=p.x&&bounds.y>=p.y&&bounds.x<p.x+m.size().width as i32&&bounds.y<p.y+m.size().height as i32}).or(monitors.first()){let p=m.position();let scale=m.scale_factor();let mut work=RECT{left:p.x,top:p.y,right:p.x+m.size().width as i32,bottom:p.y+m.size().height as i32};let monitor=unsafe{MonitorFromPoint(POINT{x:bounds.x,y:bounds.y},MONITOR_DEFAULTTONEAREST)};let mut info=windows::Win32::Graphics::Gdi::MONITORINFO{cbSize:std::mem::size_of::<windows::Win32::Graphics::Gdi::MONITORINFO>()as u32,..Default::default()};if unsafe{windows::Win32::Graphics::Gdi::GetMonitorInfoW(monitor,&mut info)}.as_bool(){work=info.rcWork;}let _=window.set_position(PhysicalPosition::new(work.right-((preview_width+20.)*scale)as i32,work.bottom-((preview_height+20.)*scale)as i32));}}
+ *LIVE.lock().unwrap()=Some(Live{epoch,config:c.clone(),bounds,samples:VecDeque::new(),packet:None});VISIBLE.store(true,Ordering::Relaxed);let _=window.show();let _=app.emit_to("recorder-zoom-preview","halo://zoom-preview-start",());Some(epoch)
+}
+pub(super) fn sample(s:&project::CursorSample){if !VISIBLE.load(Ordering::Relaxed){return;}if let Ok(mut live)=LIVE.try_lock(){if let Some(live)=live.as_mut(){live.samples.push_back(s.clone());while live.samples.front().is_some_and(|old|s.time-old.time>9.){live.samples.pop_front();}}}}
+pub(super) fn end(epoch:u64){let mut live=LIVE.lock().unwrap();if live.as_ref().is_some_and(|l|l.epoch==epoch){*live=None;VISIBLE.store(false,Ordering::Relaxed);if let Some(w)=APP.get().and_then(|a|a.get_webview_window("recorder-zoom-preview")){let _=w.hide();}}}
+fn publish(epoch:u64,bytes:&[u8],time:f64){
+ let Some((config,bounds,samples))=LIVE.try_lock().ok().and_then(|l|l.as_ref().filter(|l|l.epoch==epoch).map(|l|(l.config.clone(),l.bounds,l.samples.iter().cloned().collect::<Vec<_>>())))else{return;};if !VISIBLE.load(Ordering::Relaxed){return;}
+ let camera=cinematic::preview_state(&samples,time,bounds,&config);let pointer=samples.iter().rev().find(|s|s.time<=time).cloned();let (cw,ch)=export::styled_size(&config,bounds.w,bounds.h);let (w,h)=encoder::output_size(&config,bounds.w,bounds.h);let pad=if config.frame=="none"{0}else{frame_pad(&config,cw)};
+ let background=background_preset(&config).and_then(preset_stops).map(|s|serde_json::json!(s)).unwrap_or_else(||serde_json::json!(config.background));
+ let cursor_art=if config.kenney_cursor{let shape=pointer.as_ref().map(|p|p.shape).unwrap_or(0);let(hx,hy)=cursor_motion::hotspot(&config,shape);Some(serde_json::json!({"svg":format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">{}</svg>"#,cursor_motion::pack_style(&config,shape)),"hotspot":[hx,hy]}))}else{None};
+ let packet=serde_json::json!({"cursor_art":cursor_art,"sequence":SEQUENCE.fetch_add(1,Ordering::Relaxed)+1,"image":base64::engine::general_purpose::STANDARD.encode(bytes),"camera":camera,"pointer":pointer,"overlay_cursor":!native_cursor(&config),"config":config,"background":background,"geometry":{"width":cw,"height":ch,"padding":pad,"canvasWidth":w,"canvasHeight":h},"source_width":bounds.w,"source_height":bounds.h});
+ if let Ok(mut live)=LIVE.try_lock(){if let Some(l)=live.as_mut().filter(|l|l.epoch==epoch){l.packet=Some(packet);}}
+}
+pub(super) fn reader(mut pipe:std::process::ChildStdout,epoch:u64)->thread::JoinHandle<()>{thread::spawn(move||{
+ let mut buffer=Vec::<u8>::new();let mut chunk=[0u8;16*1024];let mut queue=VecDeque::new();let mut index=0u64;
+ loop{let Ok(n)=pipe.read(&mut chunk)else{break;};if n==0{break;}buffer.extend_from_slice(&chunk[..n]);loop{let Some(start)=buffer.windows(2).position(|b|b==[0xff,0xd8])else{if buffer.len()>2{buffer.drain(..buffer.len()-1);}break;};if start>0{buffer.drain(..start);}let Some(end)=buffer.windows(2).position(|b|b==[0xff,0xd9]).map(|i|i+2)else{if buffer.len()>1024*1024{buffer.clear();}break;};let frame=buffer.drain(..end).collect::<Vec<_>>();queue.push_back((frame,index as f64/10.));index+=1;if queue.len()>10{if let Some((bytes,time))=queue.pop_front(){publish(epoch,&bytes,time);}}}
+ }end(epoch);
+})}
+pub(super) fn frame(after:u64)->Option<serde_json::Value>{if !VISIBLE.load(Ordering::Relaxed){return None;}LIVE.try_lock().ok()?.as_ref()?.packet.as_ref().filter(|p|p["sequence"].as_u64().unwrap_or(0)>after).cloned()}
+pub(super) async fn hide(app:tauri::AppHandle)->Res<()>{VISIBLE.store(false,Ordering::Relaxed);if let Some(w)=app.get_webview_window("recorder-zoom-preview"){let _=w.hide();}let mut c=config();c.zoom_preview=false;recorder_save_config(app,c).await}
