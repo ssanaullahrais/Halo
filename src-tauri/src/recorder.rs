@@ -28,8 +28,8 @@ type Res<T>=Result<T,String>;
 
 #[derive(Clone,Serialize,Deserialize)]
 #[serde(default)]
-pub struct Config {pub shortcut:String,pub output_dir:String,pub fps:u32,pub quality:String,pub resolution:String,pub encoder:String,pub microphone:bool,pub system_audio:bool,pub microphone_id:String,pub mic_gain:f64,pub system_gain:f64,pub voice_enhance:bool,pub cursor:String,pub cursor_size:u32,pub cursor_color:String,pub click_effect:bool,pub cursor_effect:String,pub click_style:String,pub effect_strength:f64,pub frame:String,pub background:String,pub frame_padding:u32,pub countdown:u32,pub auto_fade:bool,pub smooth_cursor:bool,pub cinematic_cursor:bool,pub kenney_cursor:bool,pub show_keystrokes:bool,pub keystroke_theme:String,pub interaction_sounds:bool,pub background_music:bool,pub zoom_preview:bool,pub smart_zoom:bool,pub smart_zoom_amount:f64}
-impl Default for Config {fn default()->Self{Self{shortcut:"Ctrl+Alt+R".into(),output_dir:std::env::var("USERPROFILE").map(|p|PathBuf::from(p).join("Videos").join("Halo").to_string_lossy().into_owned()).unwrap_or_else(|_|".".into()),fps:30,quality:"high".into(),resolution:"original".into(),encoder:"auto".into(),microphone:true,system_audio:false,microphone_id:String::new(),mic_gain:1.,system_gain:1.,voice_enhance:true,cursor:"normal".into(),cursor_size:unsafe{GetSystemMetrics(SM_CXCURSOR).clamp(16,96)as u32},cursor_color:"#FFB020".into(),click_effect:false,cursor_effect:"none".into(),click_style:"moderate".into(),effect_strength:0.65,frame:"none".into(),background:"preset:aurora".into(),frame_padding:5,countdown:3,auto_fade:true,smooth_cursor:false,cinematic_cursor:false,kenney_cursor:false,show_keystrokes:false,keystroke_theme:"dark".into(),interaction_sounds:false,background_music:false,zoom_preview:false,smart_zoom:false,smart_zoom_amount:2.}}}
+pub struct Config {pub shortcut:String,pub output_dir:String,pub fps:u32,pub quality:String,pub resolution:String,pub encoder:String,pub microphone:bool,pub system_audio:bool,pub microphone_id:String,pub mic_gain:f64,pub system_gain:f64,pub voice_enhance:bool,pub cursor:String,pub cursor_size:u32,pub cursor_color:String,pub click_effect:bool,pub cursor_effect:String,pub click_style:String,pub effect_strength:f64,pub frame:String,pub background:String,pub frame_padding:u32,pub countdown:u32,pub auto_fade:bool,pub smooth_cursor:bool,pub cinematic_cursor:bool,pub kenney_cursor:bool,pub show_keystrokes:bool,pub keystroke_theme:String,pub interaction_sounds:bool,pub background_music:bool,pub zoom_preview:bool,pub smart_zoom:bool,pub smart_zoom_amount:f64,pub manual_zoom:bool}
+impl Default for Config {fn default()->Self{Self{shortcut:"Ctrl+Alt+R".into(),output_dir:std::env::var("USERPROFILE").map(|p|PathBuf::from(p).join("Videos").join("Halo").to_string_lossy().into_owned()).unwrap_or_else(|_|".".into()),fps:30,quality:"high".into(),resolution:"original".into(),encoder:"auto".into(),microphone:true,system_audio:false,microphone_id:String::new(),mic_gain:1.,system_gain:1.,voice_enhance:true,cursor:"normal".into(),cursor_size:unsafe{GetSystemMetrics(SM_CXCURSOR).clamp(16,96)as u32},cursor_color:"#FFB020".into(),click_effect:true,cursor_effect:"none".into(),click_style:"strong".into(),effect_strength:0.65,frame:"none".into(),background:"preset:aurora".into(),frame_padding:5,countdown:3,auto_fade:true,smooth_cursor:false,cinematic_cursor:false,kenney_cursor:false,show_keystrokes:false,keystroke_theme:"dark".into(),interaction_sounds:false,background_music:false,zoom_preview:false,smart_zoom:false,smart_zoom_amount:2.,manual_zoom:false}}}
 fn config_path()->PathBuf {crate::system::tools_dir().parent().unwrap().join("recorder.json")}
 pub fn config()->Config{let mut c:Config=fs::read(config_path()).ok().and_then(|d|serde_json::from_slice(&d).ok()).unwrap_or_default();if c.cinematic_cursor{c.smooth_cursor=false;}if !(2..=30).contains(&c.frame_padding){c.frame_padding=Config::default().frame_padding;}if !["weak","moderate","strong"].contains(&c.click_style.as_str()){c.click_style=Config::default().click_style;}c}
 fn validate(c:&Config)->Res<()> {
@@ -224,8 +224,8 @@ fn start_segment_with_encoder(job:&Session)->Res<Running>{
    let mut key_file=if config.show_keystrokes{Some(std::io::BufWriter::new(fs::File::create(events_path.with_file_name(format!("keys-{i}.jsonl"))).map_err(|e|e.to_string())?))}else{None};
    let mut events=std::io::BufWriter::new(fs::File::create(events_path).map_err(|e|e.to_string())?);
    let mut commands=if project::cursor_effects(&config)||target.mode=="window"{Some(std::io::BufWriter::new(fs::File::create(&file).map_err(|e|e.to_string())?))}else{None};
-   let mut program=project::CursorProgram::new(&config,bounds.w,bounds.h);let mut last=-1.;
-   let initial=project::CursorSample{context:None,wheel:0,shape:0,window_offset:None,time:0.,x:-200,y:-200,inside:false,buttons:0};serde_json::to_writer(&mut events,&initial).map_err(|e|e.to_string())?;writeln!(events).map_err(|e|e.to_string())?;if let Some(commands)=commands.as_mut(){program.push(&initial,commands).map_err(|e|e.to_string())?;}
+   let mut program=project::CursorProgram::new(&config,bounds.w,bounds.h);let mut last=-1.;let mut manual_held=(false,false);
+   let initial=project::CursorSample{context:None,wheel:0,shape:0,zoom:0,window_offset:None,time:0.,x:-200,y:-200,inside:false,buttons:0};serde_json::to_writer(&mut events,&initial).map_err(|e|e.to_string())?;writeln!(events).map_err(|e|e.to_string())?;if let Some(commands)=commands.as_mut(){program.push(&initial,commands).map_err(|e|e.to_string())?;}
    while !stopped.load(Ordering::Relaxed){
     let time=clock.lock().unwrap().map(|g|g.elapsed().as_secs_f64()).unwrap_or(0.);
     if time-last<0.005{thread::sleep(Duration::from_millis(1));continue;}last=time;
@@ -236,7 +236,9 @@ fn start_segment_with_encoder(job:&Session)->Res<Running>{
     let (x,y)=(pointer.x-r.x+ox,pointer.y-r.y+oy);
     let inside=inside&&x>=0&&y>=0&&x<bounds.w as i32&&y<bounds.h as i32;
     if let Some(file)=key_file.as_mut(){keys.drain(time,file)?;}
-    let sample=project::CursorSample{context:context.sample(bounds,r,(ox,oy)).or_else(||if config.interaction_sounds&&!config.smart_zoom&&!config.show_keystrokes{context::take_activity()}else{None}),wheel:wheel.take(),shape:cursor_motion::native_shape(),window_offset:if target.mode=="window"{Some([ox,oy])}else{None},time,x,y,inside,buttons};
+    // Numpad +/- drive manual Smart Zoom in real time; only polled when that mode is on.
+    let zoom=if config.smart_zoom&&config.manual_zoom{let(plus,minus)=unsafe{((GetAsyncKeyState(0x6B)as u16&0x8000)!=0,(GetAsyncKeyState(0x6D)as u16&0x8000)!=0)};let delta=if plus&&!manual_held.0{1}else if minus&&!manual_held.1{-1}else{0};manual_held=(plus,minus);delta}else{0};
+    let sample=project::CursorSample{context:context.sample(bounds,r,(ox,oy)).or_else(||if config.interaction_sounds&&!config.smart_zoom&&!config.show_keystrokes{context::take_activity()}else{None}),wheel:wheel.take(),shape:cursor_motion::native_shape(),zoom,window_offset:if target.mode=="window"{Some([ox,oy])}else{None},time,x,y,inside,buttons};
     zoom_preview::sample(&sample);
     serde_json::to_writer(&mut events,&sample).map_err(|e|e.to_string())?;writeln!(events).map_err(|e|e.to_string())?;
     if let Some(commands)=commands.as_mut(){program.push(&sample,commands).map_err(|e|e.to_string())?;}
@@ -302,7 +304,7 @@ fn finish(job:&Session)->Res<(PathBuf,Option<PathBuf>)>{
  finish_controlled(job,export::Control::default())
 }
 fn finish_controlled(job:&Session,control:export::Control)->Res<(PathBuf,Option<PathBuf>)>{
- if !export::needs_video_render(job){if let Some(fx)=soundtrack::render(job,None,&control)?{let source=job.original_output.clone().unwrap_or_else(||job.dir.join("audio-delivery-source.mp4"));if !source.exists(){export::save_original(job,&source)?;}let duration=job.segments.iter().map(|s|s.duration).sum::<f64>();export::concat_with_soundtrack(&[source.clone()],&job.output,&job.dir.join("audio-delivery.txt"),duration,Some(&source),job.segments.iter().any(|s|!s.audio.is_empty()),&fx,job.config.auto_fade,&control)?;return Ok((job.output.clone(),job.original_output.clone()));}}
+ if !export::needs_video_render(job){if let Some(fx)=soundtrack::render(job,None,&control)?{let source=job.original_output.clone().unwrap_or_else(||job.dir.join("audio-delivery-source.mp4"));if !source.exists(){export::save_original(job,&source)?;}let duration=job.segments.iter().map(|s|s.duration).sum::<f64>();export::concat_with_soundtrack(&[source.clone()],&job.output,&job.dir.join("audio-delivery.txt"),duration,Some(&source),job.segments.iter().any(|s|!s.audio.is_empty()),&fx,job.config.auto_fade,None,&control)?;return Ok((job.output.clone(),job.original_output.clone()));}}
 
  let (width,height)=encoder::output_size(&job.config,job.bounds.w,job.bounds.h);
  encoder::export_with_fallback(&job.config,job.encoder,&control,
@@ -377,7 +379,10 @@ fn finish_partitioned_controlled(job:&Session,workers:usize,frames_per_part:u64,
  control.set_stage(2);
  render::parallel(prepared,workers,total_duration,control.clone())?;
  control.set_stage(4);
- if let Some(fx)=soundtrack::render(job,camera.as_ref(),&control)?{export::concat_with_soundtrack(&completed,&job.output,&job.dir.join("styled-segments.txt"),total_duration,job.original_output.as_deref(),job.segments.iter().any(|s|!s.audio.is_empty()),&fx,c.auto_fade,&control)?;}else{export::concat_delivery_controlled(&completed,&job.output,&job.dir.join("styled-segments.txt"),total_duration,0.,100.,job.original_output.as_deref(),None,c.auto_fade,&control)?;}
+ // Each rendered section's exact duration is already known; asserting it in the
+ // concat list avoids a probed-duration rounding drift adding a stray frame.
+ let part_durations=parts.iter().map(|p|p.duration).collect::<Vec<_>>();
+ if let Some(fx)=soundtrack::render(job,camera.as_ref(),&control)?{export::concat_with_soundtrack(&completed,&job.output,&job.dir.join("styled-segments.txt"),total_duration,job.original_output.as_deref(),job.segments.iter().any(|s|!s.audio.is_empty()),&fx,c.auto_fade,Some(&part_durations),&control)?;}else{export::concat_delivery_controlled(&completed,&job.output,&job.dir.join("styled-segments.txt"),total_duration,0.,100.,job.original_output.as_deref(),Some(&part_durations),c.auto_fade,&control)?;}
  Ok((job.output.clone(),job.original_output.clone()))
 }
 

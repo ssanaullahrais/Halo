@@ -182,7 +182,7 @@ pub(super) fn load(path:&Path)->Res<(Session,Option<PathBuf>)> {
 }
 
 #[derive(Serialize,Deserialize,Clone)]
-pub(super) struct CursorSample {#[serde(default,skip_serializing_if="Option::is_none")]pub context:Option<context::Context>,#[serde(default)]pub wheel:i32,#[serde(default)]pub shape:u8,pub time:f64,pub x:i32,pub y:i32,pub inside:bool,pub buttons:u8,#[serde(default,skip_serializing_if="Option::is_none")]pub window_offset:Option<[i32;2]>}
+pub(super) struct CursorSample {#[serde(default,skip_serializing_if="Option::is_none")]pub context:Option<context::Context>,#[serde(default)]pub wheel:i32,#[serde(default)]pub shape:u8,#[serde(default)]pub zoom:i32,pub time:f64,pub x:i32,pub y:i32,pub inside:bool,pub buttons:u8,#[serde(default,skip_serializing_if="Option::is_none")]pub window_offset:Option<[i32;2]>}
 pub(super) fn cursor_effects(config:&Config)->bool {
  ((config.kenney_cursor||cursor_motion::processed(config))&&config.cursor!="hidden")||config.cursor=="highlight"||config.cursor=="large"||(config.frame=="mac"&&config.cursor!="hidden")||config.click_effect||config.cursor_effect!="none"
 }
@@ -220,6 +220,11 @@ pub(super) fn restore_cursor(path:&Path,commands:&Path,config:&Config,w:u32,h:u3
 pub(super) fn restore_cursor_controlled(path:&Path,commands:&Path,config:&Config,w:u32,h:u32,duration:f64,control:&export::Control)->Res<()> {
  let mut samples=read_cursor(path,w,h,duration,control)?;
  if cursor_motion::processed(config){process_samples(&mut samples,w,h,cursor_motion::cinematic(config));}
+ write_cursor_commands(&samples,commands,config,w,h,control)
+}
+// Shared with the Smart Zoom camera planner, which already holds these samples
+// smoothed in memory; this avoids reading and re-smoothing the file a second time.
+pub(super) fn write_cursor_commands(samples:&[CursorSample],commands:&Path,config:&Config,w:u32,h:u32,control:&export::Control)->Res<()> {
  if !cursor_effects(config)&&!samples.iter().any(|s|s.window_offset.is_some()){return Ok(());}
  let mut output=std::io::BufWriter::new(fs::File::create(commands).map_err(|e|e.to_string())?);let mut program=CursorProgram::new(config,w,h);program.pre_smoothed=cursor_motion::processed(config);
  for (i,sample)in samples.iter().enumerate(){
@@ -291,7 +296,7 @@ pub(super) fn process_samples(samples:&mut[CursorSample],w:u32,h:u32,cinematic:b
  }
  #[test]fn semantic_cursor_events_rebuild_timed_effect_commands(){
   let (root,_)=minimal();let file=root.join("events.jsonl");let commands=root.join("commands.txt");let config=Config{click_effect:true,cursor:"large".into(),cursor_effect:"trail".into(),..Config::default()};
-  let samples=[CursorSample{context:None,wheel:0,shape:0,window_offset:None,time:0.,x:40,y:60,inside:true,buttons:0},CursorSample{context:None,wheel:0,shape:0,window_offset:None,time:0.1,x:80,y:60,inside:true,buttons:1},CursorSample{context:None,wheel:0,shape:0,window_offset:None,time:0.3,x:100,y:60,inside:true,buttons:0},CursorSample{context:None,wheel:0,shape:0,window_offset:None,time:0.8,x:140,y:60,inside:true,buttons:0}];
+  let samples=[CursorSample{context:None,wheel:0,shape:0,zoom:0,window_offset:None,time:0.,x:40,y:60,inside:true,buttons:0},CursorSample{context:None,wheel:0,shape:0,zoom:0,window_offset:None,time:0.1,x:80,y:60,inside:true,buttons:1},CursorSample{context:None,wheel:0,shape:0,zoom:0,window_offset:None,time:0.3,x:100,y:60,inside:true,buttons:0},CursorSample{context:None,wheel:0,shape:0,zoom:0,window_offset:None,time:0.8,x:140,y:60,inside:true,buttons:0}];
   fs::write(&file,samples.iter().map(|s|format!("{}\n",serde_json::to_string(s).unwrap())).collect::<String>()).unwrap();restore_cursor(&file,&commands,&config,384,256,1.).unwrap();let text=fs::read_to_string(commands).unwrap();assert!(text.contains("0.100 colorchannelmixer@clickalpha0 aa 1"));assert!(text.contains("0.800 colorchannelmixer@clickalpha0 aa 0"));assert!(text.contains("overlay@trail0"));fs::remove_dir_all(root).unwrap();
  }
  #[test]fn corrupt_cursor_events_fail_without_being_executed(){
@@ -301,7 +306,7 @@ pub(super) fn process_samples(samples:&mut[CursorSample],w:u32,h:u32,cinematic:b
   let mut job=super::super::media_tests::fixture(30,"strong");job.config.frame="mac".into();job.config.click_effect=true;job.config.show_keystrokes=true;job.config.kenney_cursor=true;
   let captured=std::mem::take(&mut job.segments);create(&mut job).unwrap();job.segments=captured;let assets=assets_dir(&job);let raw=assets.join("segment-0.mp4");fs::copy(&job.segments[0].raw,&raw).unwrap();job.segments[0].raw=raw;
   job.segments[0].commands=job.dir.join("cursor-0.txt");let events=assets.join("cursor-0.jsonl");fs::write(assets.join("keys-0.jsonl"),"{\"time\":0.2,\"keys\":[\"Ctrl\",\"s\"]}\n").unwrap();
-  let mut samples=String::new();for n in 0..36{let sample=CursorSample{context:None,wheel:0,shape:0,window_offset:None,time:n as f64/30.,x:50+n*4,y:120,inside:true,buttons:if n==6{1}else{0}};samples+=&format!("{}\n",serde_json::to_string(&sample).unwrap());}fs::write(&events,samples).unwrap();restore_cursor(&events,&job.segments[0].commands,&job.config,384,256,1.2).unwrap();
+  let mut samples=String::new();for n in 0..36{let sample=CursorSample{context:None,wheel:0,shape:0,zoom:0,window_offset:None,time:n as f64/30.,x:50+n*4,y:120,inside:true,buttons:if n==6{1}else{0}};samples+=&format!("{}\n",serde_json::to_string(&sample).unwrap());}fs::write(&events,samples).unwrap();restore_cursor(&events,&job.segments[0].commands,&job.config,384,256,1.2).unwrap();
   let audio=assets.join("mic-0.wav");let mut tone=ffmpeg();tone.args(["-f","lavfi","-i","sine=frequency=440:sample_rate=48000","-t","1.2"]).arg(&audio);run(tone).unwrap();job.segments[0].audio.push((audio,true));
   let mut annotation=crate::recorder_annotations::Annotation{id:1,kind:"arrow".into(),x:30.,y:40.,w:180.,h:60.,text:String::new(),color:"#FF375F".into(),stroke:3.,font_size:24.,start:0.1,end:None,keyframes:vec![],points:vec![]};annotation.keyframes.push(annotation.frame(0.1));annotation.w=260.;annotation.keyframes.push(annotation.frame(0.6));job.annotations.push(annotation);
   let original=job.output.with_file_name("original.mp4");export::save_original(&job,&original).unwrap();job.original_output=Some(original.clone());checkpoint(&job,Some(&original),"cancelled").unwrap();finish(&job).unwrap();
@@ -317,13 +322,13 @@ pub(super) fn process_samples(samples:&mut[CursorSample],w:u32,h:u32,cinematic:b
 #[cfg(test)]mod smooth_cursor_tests{
  use super::*;
  #[test]fn offline_smoothing_removes_jitter_without_moving_interactions(){
-  let mut samples=(0..200).map(|i|CursorSample{context:None,wheel:0,shape:0,time:i as f64/200.,x:100+i*2+if i%2==0{5}else{-5},y:100,inside:true,buttons:if(80..100).contains(&i){1}else{0},window_offset:None}).collect::<Vec<_>>();let original=samples.clone();smooth_samples(&mut samples,800,600);
+  let mut samples=(0..200).map(|i|CursorSample{context:None,wheel:0,shape:0,zoom:0,time:i as f64/200.,x:100+i*2+if i%2==0{5}else{-5},y:100,inside:true,buttons:if(80..100).contains(&i){1}else{0},window_offset:None}).collect::<Vec<_>>();let original=samples.clone();smooth_samples(&mut samples,800,600);
   for i in [0,80,100,199]{assert_eq!(samples[i].x,original[i].x);}
   let acceleration=|points:&[CursorSample]|points.windows(3).map(|p|(p[2].x-2*p[1].x+p[0].x).abs()).sum::<i32>();assert!(acceleration(&samples)<acceleration(&original)/3);
  }
  #[test]fn smoothing_reduces_jitter_but_preserves_exact_click_targets(){
   let c=Config{smooth_cursor:true,cursor:"normal".into(),..Config::default()};assert!(!native_cursor(&c));let mut p=CursorProgram::new(&c,800,600);let mut out=Vec::new();
-  for (time,x,buttons)in [(0.,100,0),(0.01,300,0),(0.02,300,1)]{let s=CursorSample{context:None,wheel:0,shape:0,time,x,y:100,inside:true,buttons,window_offset:None};p.push(&s,&mut out).unwrap();}
+  for (time,x,buttons)in [(0.,100,0),(0.01,300,0),(0.02,300,1)]{let s=CursorSample{context:None,wheel:0,shape:0,zoom:0,time,x,y:100,inside:true,buttons,window_offset:None};p.push(&s,&mut out).unwrap();}
   let text=String::from_utf8(out).unwrap();let x_at=|time:&str|text.lines().find(|line|line.starts_with(time)&&line.contains("overlay@pointer x ")).unwrap().split_whitespace().nth(3).unwrap().trim_end_matches(';').parse::<i32>().unwrap();assert!(x_at("0.010")<200);assert_eq!(x_at("0.020")+cursor_motion::PAD as i32+(c.cursor_size as f32*5./64.).round()as i32,300);
  }
 }

@@ -8,14 +8,17 @@ impl Encoder{
  pub(super) fn settings(self,command:&mut std::process::Command,c:&Config,capture:bool){
   let q=match c.quality.as_str(){"archive"=>12,"balanced"=>23,_=>16}.to_string();
   command.args(["-c:v",self.name()]);
+  // No B-frames, on capture or render: a rendered recording is cut into many
+  // independently encoded sections and stream-copy concatenated afterwards,
+  // and B-frame reordering across that splice can duplicate a decoded frame.
   match self{
    Self::Nvenc=>{
-    command.args(["-preset",if capture{"p1"}else{"p5"},"-rc","vbr","-cq",&q,"-b:v","0"]);
-    if capture{command.args(["-zerolatency","1","-delay","0","-bf","0"]);}
+    command.args(["-preset",if capture{"p1"}else{"p5"},"-rc","vbr","-cq",&q,"-b:v","0","-bf","0"]);
+    if capture{command.args(["-zerolatency","1","-delay","0"]);}
    }
    Self::Qsv=>{
-    command.args(["-preset",if capture{"veryfast"}else{"medium"},"-global_quality",&q,"-look_ahead","0"]);
-    if capture{command.args(["-async_depth","1","-bf","0"]);}
+    command.args(["-preset",if capture{"veryfast"}else{"medium"},"-global_quality",&q,"-look_ahead","0","-bf","0"]);
+    if capture{command.args(["-async_depth","1"]);}
    }
    Self::Amf=>{
     // CQP works on older AMF drivers as well as recent ones; no bitrate cap
@@ -24,7 +27,7 @@ impl Encoder{
     if capture{command.args(["-async_depth","1"]);}
    }
    Self::Cpu=>{
-    command.args(["-preset",if capture{"ultrafast"}else{"medium"},"-crf",&q]);
+    command.args(["-preset",if capture{"ultrafast"}else{"medium"},"-crf",&q,"-bf","0"]);
     if capture{command.args(["-tune","zerolatency"]);}
    }
   }

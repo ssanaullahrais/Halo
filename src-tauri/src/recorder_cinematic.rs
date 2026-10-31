@@ -20,6 +20,9 @@ pub(super) struct State{pub x:f64,pub y:f64,pub zoom:f64}
 pub(super) struct Track{pub frames:Vec<State>,width:u32,height:u32,fps:u32}
 
 pub(super) fn prepare_cursor(job:&Session,control:&export::Control)->Res<()>{
+ // Smart Zoom's planner reads and smooths these same samples; it writes the
+ // cursor commands itself so the file is never parsed and smoothed twice.
+ if job.config.smart_zoom{return Ok(());}
  if !cursor_motion::processed(&job.config)||job.config.cursor=="hidden"{return Ok(());}
  for(i,segment)in job.segments.iter().enumerate(){let events=project::assets_dir(job).join(format!("cursor-{i}.jsonl"));project::restore_cursor_controlled(&events,&segment.commands,&job.config,job.bounds.w,job.bounds.h,segment.duration,control)?;}Ok(())
 }
@@ -29,12 +32,13 @@ pub(super) fn plan(job:&Session,control:&export::Control)->Res<Option<Track>>{
  let fps=job.config.fps;let count=job.segments.iter().map(|s|(s.duration*fps as f64).round().max(1.)as usize).sum::<usize>();
  let mut inputs=Vec::new();inputs.try_reserve_exact(count).map_err(|_|"Not enough memory to plan this recording's Smart Zoom.".to_string())?;inputs.resize(count,Input::default());
  let mut contexts=Vec::new();let mut text_point=None;let mut last_click=None;
- let mut actions=Vec::<Action>::new();let mut scroll_events=Vec::new();let mut base=0usize;let mut offset=0.;
+ let mut actions=Vec::<Action>::new();let mut scroll_events=Vec::new();let mut zoom_events=Vec::<(f64,i32)>::new();let mut base=0usize;let mut offset=0.;
  for (i,segment)in job.segments.iter().enumerate(){
   let path=project::assets_dir(job).join(format!("cursor-{i}.jsonl"));
   let mut samples=project::read_cursor(&path,job.bounds.w,job.bounds.h,segment.duration,control)?;
   // Camera follows the same simplified pointer path that the viewer sees.
   if cursor_motion::processed(&job.config){project::process_samples(&mut samples,job.bounds.w,job.bounds.h,cursor_motion::cinematic(&job.config));}
+  if job.config.cursor!="hidden"{project::write_cursor_commands(&samples,&segment.commands,&job.config,job.bounds.w,job.bounds.h,control)?;}
   let length=(segment.duration*fps as f64).round().max(1.)as usize;let end=base+length;let mut fill=base;let mut last=Input::default();let mut down=false;let mut active_action=None;
   for sample in samples{
    if control.cancelled(){return Err("Recording cancelled.".into());}
@@ -47,13 +51,14 @@ pub(super) fn plan(job:&Session,control:&export::Control)->Res<Option<Track>>{
    if let Some(mut data)=sample.context.clone(){if data.activity!=0&&data.focus.is_none(){if let Some((x,y))=text_point.or(last_click){data.focus=Some(context::Region{kind:0,x:(x-100).max(0),y:(y-20).max(0),w:200.min(job.bounds.w.saturating_sub((x-100).max(0)as u32)),h:40.min(job.bounds.h.saturating_sub((y-20).max(0)as u32)),multiline:false});}}contexts.push(ContextEvent{time,data});}
    if pressed&&!down&&sample.inside{last_click=Some((sample.x,sample.y));if sample.shape!=2{text_point=None;}actions.push(Action{time,end:time,x:last.x,y:last.y});active_action=Some(actions.len()-1);}
    if sample.wheel!=0&&sample.inside{scroll_events.push(Scroll{time,delta:sample.wheel});}
+   if sample.zoom!=0{zoom_events.push((time,sample.zoom));}
    if pressed{if let Some(index)=active_action{actions[index].end=time;}}else{active_action=None;}
    down=pressed;
   }
   while fill<end{inputs[fill]=last;fill+=1;}
   base=end;offset+=segment.duration;
  }
- let mut track=build_context(&inputs,&actions,&scroll_events,job.bounds.w,job.bounds.h,fps,job.config.smart_zoom_amount,&contexts);
+ let mut track=if job.config.manual_zoom{build_manual(&inputs,&zoom_events,job.bounds.w,job.bounds.h,fps,job.config.smart_zoom_amount)}else{build_context(&inputs,&actions,&scroll_events,job.bounds.w,job.bounds.h,fps,job.config.smart_zoom_amount,&contexts)};
  if let Some(track)=track.as_mut(){let (w,h)=export::styled_size(&job.config,job.bounds.w,job.bounds.h);let (ow,oh)=encoder::output_size(&job.config,job.bounds.w,job.bounds.h);let (x,y)=if job.config.frame=="none"{(0.,0.)}else{let pad=frame_pad(&job.config,w)as f64;(pad,pad+40.)};track.reframe(w,h,ow,oh,x,y);}
  Ok(track)
 }
@@ -63,7 +68,7 @@ pub(super) struct ScrollTrack{spans:Vec<(f64,f64)>}
 impl ScrollTrack{
  pub(super) fn plan(job:&Session,control:&export::Control)->Res<Self>{
   let mut spans=Vec::new();let mut offset=0.;
-  if job.config.smart_zoom{for(i,segment)in job.segments.iter().enumerate(){let samples=project::read_cursor(&project::assets_dir(job).join(format!("cursor-{i}.jsonl")),job.bounds.w,job.bounds.h,segment.duration,control)?;let events=samples.iter().filter(|s|s.inside&&s.wheel!=0).map(|s|Scroll{time:s.time,delta:s.wheel}).collect::<Vec<_>>();for g in gestures(&events){spans.push((offset+g.start,offset+(g.end+0.12).min(segment.duration)));}offset+=segment.duration;}}
+  if job.config.smart_zoom{for(i,segment)in job.segments.iter().enumerate(){let samples=project::read_cursor(&project::assets_dir(job).join(format!("cursor-{i}.jsonl")),job.bounds.w,job.bounds.h,segment.duration,control)?;let events=samples.iter().filter(|s|s.inside&&s.wheel!=0).map(|s|Scroll{time:s.time,delta:s.wheel}).collect::<Vec<_>>();for g in gestures(&events){spans.push((offset+g.start,offset+(g.end+0.04).min(segment.duration)));}offset+=segment.duration;}}
   Ok(Self{spans})
  }
  pub(super) fn filter(&self,offset:f64,duration:f64)->Option<String>{let intervals=self.spans.iter().filter_map(|&(a,b)|{let start=(a-offset).max(0.);let end=(b-offset).min(duration);(end>start).then(||format!("gte(t,{start:.6})*lt(t,{end:.6})"))}).collect::<Vec<_>>();if intervals.is_empty(){None}else{Some(format!("avgblur=sizeX=1:sizeY=3:planes=1:enable='{}'",intervals.join("+")))}}
@@ -71,15 +76,38 @@ impl ScrollTrack{
 // The delayed live view uses the same framing planner with only currently known
 // events. Export still has the complete future timeline and final cursor glides.
 pub(super) fn preview_state(samples:&[project::CursorSample],time:f64,bounds:Rect,c:&Config)->State{
- let base=(time-6.).max(0.);let finish=samples.last().map(|s|s.time).unwrap_or(time)+2.;let count=((finish-base)*c.fps as f64).ceil().max(2.)as usize;let mut inputs=vec![Input::default();count];let mut actions=Vec::new();let mut scrolls=Vec::new();let mut contexts=Vec::new();let mut last=Input::default();let mut fill=0usize;let mut down=false;let mut active=None;
- for s in samples.iter().filter(|s|s.time>=base){let t=s.time-base;let tick=((t*c.fps as f64).round()as usize).min(count-1);while fill<tick{inputs[fill]=last;fill+=1;}last=Input{x:s.x as f64,y:s.y as f64,inside:s.inside,drag:s.buttons&1!=0,offset:s.window_offset.unwrap_or([0,0])};inputs[tick]=last;let pressed=s.buttons&1!=0;if pressed&&!down&&s.inside{actions.push(Action{time:t,end:t,x:last.x,y:last.y});active=Some(actions.len()-1);}if pressed{if let Some(i)=active{actions[i].end=t;}}else{active=None;}down=pressed;if s.wheel!=0&&s.inside{scrolls.push(Scroll{time:t,delta:s.wheel});}if let Some(data)=&s.context{contexts.push(ContextEvent{time:t,data:data.clone()});}}
- while fill<count{inputs[fill]=last;fill+=1;}let track=build_context(&inputs,&actions,&scrolls,bounds.w,bounds.h,c.fps,c.smart_zoom_amount,&contexts);let (w,h)=export::styled_size(c,bounds.w,bounds.h);let (ow,oh)=encoder::output_size(c,bounds.w,bounds.h);let pad=if c.frame=="none"{0.}else{frame_pad(c,w)as f64};if let Some(mut track)=track{track.reframe(w,h,ow,oh,pad,if c.frame=="none"{0.}else{pad+40.});track.frames.get(((time-base)*c.fps as f64).round()as usize).copied().unwrap_or(State{x:0.,y:0.,zoom:1.})}else{State{x:0.,y:0.,zoom:1.}}
+ let base=(time-6.).max(0.);let finish=samples.last().map(|s|s.time).unwrap_or(time)+2.;let count=((finish-base)*c.fps as f64).ceil().max(2.)as usize;let mut inputs=vec![Input::default();count];let mut actions=Vec::new();let mut scrolls=Vec::new();let mut contexts=Vec::new();let mut zooms=Vec::<(f64,i32)>::new();let mut last=Input::default();let mut fill=0usize;let mut down=false;let mut active=None;
+ for s in samples.iter().filter(|s|s.time>=base){let t=s.time-base;let tick=((t*c.fps as f64).round()as usize).min(count-1);while fill<tick{inputs[fill]=last;fill+=1;}last=Input{x:s.x as f64,y:s.y as f64,inside:s.inside,drag:s.buttons&1!=0,offset:s.window_offset.unwrap_or([0,0])};inputs[tick]=last;let pressed=s.buttons&1!=0;if pressed&&!down&&s.inside{actions.push(Action{time:t,end:t,x:last.x,y:last.y});active=Some(actions.len()-1);}if pressed{if let Some(i)=active{actions[i].end=t;}}else{active=None;}down=pressed;if s.wheel!=0&&s.inside{scrolls.push(Scroll{time:t,delta:s.wheel});}if s.zoom!=0{zooms.push((t,s.zoom));}if let Some(data)=&s.context{contexts.push(ContextEvent{time:t,data:data.clone()});}}
+ while fill<count{inputs[fill]=last;fill+=1;}let track=if c.manual_zoom{build_manual(&inputs,&zooms,bounds.w,bounds.h,c.fps,c.smart_zoom_amount)}else{build_context(&inputs,&actions,&scrolls,bounds.w,bounds.h,c.fps,c.smart_zoom_amount,&contexts)};let (w,h)=export::styled_size(c,bounds.w,bounds.h);let (ow,oh)=encoder::output_size(c,bounds.w,bounds.h);let pad=if c.frame=="none"{0.}else{frame_pad(c,w)as f64};if let Some(mut track)=track{track.reframe(w,h,ow,oh,pad,if c.frame=="none"{0.}else{pad+40.});track.frames.get(((time-base)*c.fps as f64).round()as usize).copied().unwrap_or(State{x:0.,y:0.,zoom:1.})}else{State{x:0.,y:0.,zoom:1.}}
+}
+// Manual Smart Zoom: the camera always follows the cursor; Numpad +/- step the
+// zoom level up or down and every step eases in, so held keys ramp smoothly.
+const MANUAL_EASE:f64=0.35;
+fn build_manual(inputs:&[Input],events:&[(f64,i32)],width:u32,height:u32,fps:u32,amount:f64)->Option<Track>{
+ if events.is_empty()||inputs.len()<2{return None;}
+ // One key press is the whole gesture: + jumps straight to the configured
+ // strength, - returns straight to 1x. There is no incremental stepping.
+ let mut checkpoints=vec![(0.,1.)];
+ for &(time,delta)in events{checkpoints.push((time,if delta>0{amount}else{1.}));}
+ let mut frames=Vec::with_capacity(inputs.len());let mut idx=0usize;
+ for(i,input)in inputs.iter().enumerate(){
+  let time=i as f64/fps as f64;
+  while idx+1<checkpoints.len()&&checkpoints[idx+1].0<=time{idx+=1;}
+  let(change,target)=checkpoints[idx];let previous=if idx==0{1.}else{checkpoints[idx-1].1};
+  let zoom=(previous+(target-previous)*glide((time-change)/MANUAL_EASE)).max(1.);
+  let(vw,vh)=(width as f64/zoom,height as f64/zoom);
+  let mut x=(input.x-vw/2.).clamp(0.,width as f64-vw);let mut y=(input.y-vh/2.).clamp(0.,height as f64-vh);
+  let(left,top)=(input.offset[0]as f64,input.offset[1]as f64);let(right,bottom)=(width as f64-left,height as f64-top);
+  if right-left>=vw{x=x.clamp(left,right-vw);}if bottom-top>=vh{y=y.clamp(top,bottom-vh);}
+  frames.push(State{x,y,zoom});
+ }
+ if frames.iter().all(|s|s.zoom<1.00001){None}else{Some(Track{frames,width,height,fps})}
 }
 fn gestures(events:&[Scroll])->Vec<ScrollGesture>{
  let mut result=Vec::<ScrollGesture>::new();let(mut start,mut last,mut distance,mut emitted)=(0.,-1.,0u64,false);
  for event in events{if event.time-last>0.3{start=event.time;distance=0;emitted=false;}last=event.time;distance+=event.delta.unsigned_abs()as u64;if distance>=120{if !emitted{result.push(ScrollGesture{start,end:event.time});emitted=true;}else if let Some(g)=result.last_mut(){g.end=event.time;}}}result
 }
-fn nearby(a:&context::Region,b:&context::Region,w:u32,h:u32)->bool{let(ax,ay)=(a.x as f64+a.w as f64/2.,a.y as f64+a.h as f64/2.);let(bx,by)=(b.x as f64+b.w as f64/2.,b.y as f64+b.h as f64/2.);(ax-bx).abs()<w as f64*0.18&&(ay-by).abs()<h as f64*0.2}
+fn nearby(a:&context::Region,b:&context::Region,w:u32,h:u32)->bool{let(ax,ay)=(a.x as f64+a.w as f64/2.,a.y as f64+a.h as f64/2.);let(bx,by)=(b.x as f64+b.w as f64/2.,b.y as f64+b.h as f64/2.);(ax-bx).abs()<w as f64*0.22&&(ay-by).abs()<h as f64*0.24}
 fn union(a:&context::Region,b:&context::Region)->context::Region{let(x,y)=(a.x.min(b.x),a.y.min(b.y));context::Region{x,y,w:(a.x as i64+a.w as i64).max(b.x as i64+b.w as i64).saturating_sub(x as i64)as u32,h:(a.y as i64+a.h as i64).max(b.y as i64+b.h as i64).saturating_sub(y as i64)as u32,..a.clone()}}
 fn strength(r:&context::Region,typing:bool,w:u32,h:u32,amount:f64)->f64{
  let cap=if typing||r.kind==1||r.kind==4{1.28}else if r.kind==0{1.32}else{1.45};let margin=if typing{1.3}else{1.2};amount.min(cap).min(w as f64/(r.w as f64*margin).max(1.)).min(h as f64/(r.h as f64*margin).max(1.)).max(1.)
@@ -87,7 +115,7 @@ fn strength(r:&context::Region,typing:bool,w:u32,h:u32,amount:f64)->f64{
 fn contains_point(r:&context::Region,x:f64,y:f64)->bool{x>=r.x as f64-8.&&y>=r.y as f64-8.&&x<=r.x as f64+r.w as f64+8.&&y<=r.y as f64+r.h as f64+8.}
 fn target_at(action:&Action,contexts:&[ContextEvent])->Option<context::Region>{let current=contexts.iter().rev().find(|e|e.time<=action.time+0.02);current.and_then(|e|e.data.target.as_ref()).filter(|r|contains_point(r,action.x,action.y)).cloned().or_else(||contexts.iter().filter(|e|e.time>action.time&&e.time<=action.time+0.25&&current.is_none_or(|c|c.data.view==0||e.data.view==c.data.view)).find_map(|e|e.data.target.as_ref().filter(|r|contains_point(r,action.x,action.y))).cloned())}
 // A focused edit is a task, not an idle timer. Only bounds/categories are used.
-fn stays_in_task(inputs:&[Input],a:&context::Region,b:&context::Region,from:f64,to:f64,fps:u32,width:u32,height:u32)->bool{let r=union(a,b);let px=width as f64*0.12;let py=height as f64*0.15;let first=(from*fps as f64).floor().max(0.)as usize;let end=((to*fps as f64).ceil()as usize+1).min(inputs.len());let mut outside=0;let mut run=0;let mut longest=0;let Some(samples)=inputs.get(first..end)else{return false;};for p in samples{let near=p.inside&&p.x>=r.x as f64-px&&p.x<=r.x as f64+r.w as f64+px&&p.y>=r.y as f64-py&&p.y<=r.y as f64+r.h as f64+py;if near{run=0;}else{outside+=1;run+=1;longest=longest.max(run);}}!samples.is_empty()&&outside as f64/samples.len()as f64<=0.15&&longest as f64/fps as f64<=0.3}
+fn stays_in_task(inputs:&[Input],a:&context::Region,b:&context::Region,from:f64,to:f64,fps:u32,width:u32,height:u32)->bool{let r=union(a,b);let px=width as f64*0.16;let py=height as f64*0.18;let first=(from*fps as f64).floor().max(0.)as usize;let end=((to*fps as f64).ceil()as usize+1).min(inputs.len());let mut outside=0;let mut run=0;let mut longest=0;let Some(samples)=inputs.get(first..end)else{return false;};for p in samples{let near=p.inside&&p.x>=r.x as f64-px&&p.x<=r.x as f64+r.w as f64+px&&p.y>=r.y as f64-py&&p.y<=r.y as f64+r.h as f64+py;if near{run=0;}else{outside+=1;run+=1;longest=longest.max(run);}}!samples.is_empty()&&outside as f64/samples.len()as f64<=0.25&&longest as f64/fps as f64<=0.45}
 fn focus_release(begin:f64,region:&context::Region,initial_edit:Option<context::Region>,contexts:&[ContextEvent],actions:&[Action],scrolls:&[ScrollGesture],finish:f64,width:u32,height:u32)->f64{
  let mut release=finish.max(begin);let view=contexts.iter().rev().find(|e|e.time<=begin+0.02).map(|e|e.data.view).unwrap_or(0);
  for(i,e)in contexts.iter().enumerate().filter(|(_,e)|e.time>begin+0.03){let end_key=e.data.activity&context::ESCAPE!=0||e.data.activity&context::ENTER!=0&&!e.data.focus.as_ref().is_some_and(|r|r.multiline);let other_view=view!=0&&e.data.view!=0&&e.data.view!=view;let lost=e.time>begin+0.4&&e.data.focus.as_ref().is_none_or(|r|!nearby(r,region,width,height));let recovered=lost&&contexts.iter().skip(i+1).take_while(|next|next.time-e.time<=0.35).any(|next|next.data.focus.as_ref().is_some_and(|r|nearby(r,region,width,height)));if end_key||other_view||lost&&!recovered{release=release.min(e.time);break;}}
@@ -134,8 +162,8 @@ fn build_context(inputs:&[Input],actions:&[Action],scroll_events:&[Scroll],width
   if let Some(edit)=shots.iter_mut().rev().find(|s|s.typing&&action.time>=s.start&&action.time-s.release<1.5&&contains(&s.region)){edit.release=edit.release.max(action.time+CLICK_HOLD);edit.end=edit.release+TRANSITION;continue;}
   let mut r=target.unwrap_or(context::Region{kind:0,x:action.x as i32,y:action.y as i32,w:1,h:1,multiline:false});
   if action.end-action.time>0.25{for(i,input)in inputs.iter().enumerate(){let t=i as f64/fps as f64;if t>=action.time&&t<=action.end&&input.inside&&input.drag{r=union(&r,&context::Region{kind:0,x:input.x as i32,y:input.y as i32,w:1,h:1,multiline:false});}}}
-  let release=(action.time+CLICK_HOLD).max(action.end);let mut shot=Shot{start:(action.time-TRANSITION-CLICK_SETTLE).max(0.),peak:(action.time-CLICK_SETTLE).max(0.),release,end:release+TRANSITION,zoom:strength(&r,false,width,height,amount),region:r,typing:false};
-  if let Some(previous)=shots.last_mut().filter(|s|!s.typing&&action.time<=s.release+4.&&nearby(&s.region,&shot.region,width,height)&&stays_in_task(inputs,&s.region,&shot.region,s.peak,action.time,fps,width,height)&&!scrolls.iter().any(|g|g.start>s.peak&&g.start<action.time)&&!boundaries.iter().chain(endings.iter()).any(|t|*t>s.peak&&*t<=action.time)&&!typing_shots.iter().any(|edit|edit.start>s.peak&&edit.start<action.time)){previous.region=union(&previous.region,&shot.region);previous.zoom=strength(&previous.region,false,width,height,amount);previous.release=shot.release;previous.end=shot.end;continue;}
+  let start=(action.time-TRANSITION-CLICK_SETTLE).max(0.);let peak=(action.time-CLICK_SETTLE).max(start+0.12);let release=(action.time+CLICK_HOLD).max(action.end);let mut shot=Shot{start,peak,release,end:release+TRANSITION,zoom:strength(&r,false,width,height,amount),region:r,typing:false};
+  if let Some(previous)=shots.last_mut().filter(|s|!s.typing&&action.time<=s.release+6.&&nearby(&s.region,&shot.region,width,height)&&stays_in_task(inputs,&s.region,&shot.region,s.peak,action.time,fps,width,height)&&!scrolls.iter().any(|g|g.start>s.peak&&g.start<action.time)&&!boundaries.iter().chain(endings.iter()).any(|t|*t>s.peak&&*t<=action.time)&&!typing_shots.iter().any(|edit|edit.start>s.peak&&edit.start<action.time)){previous.region=union(&previous.region,&shot.region);previous.zoom=strength(&previous.region,false,width,height,amount);previous.release=shot.release;previous.end=shot.end;continue;}
   // A newly opened page/dialog ends old framing. Never keep zooming toward a
   // previous button after the interface has changed under it.
   if let Some(t)=boundaries.iter().chain(endings.iter()).copied().filter(|t|*t>action.time&&*t<shot.end).min_by(f64::total_cmp){shot.release=shot.release.min((t-0.25).max(action.time));shot.peak=shot.peak.min(shot.release);shot.end=t+0.15;}
@@ -218,6 +246,7 @@ fn expression(values:&[[f64;4]],keys:&[usize],column:usize,a:usize,b:usize)->Str
  fn event(time:f64,activity:u8)->ContextEvent{ContextEvent{time,data:context::Context{focus:Some(field()),activity,..Default::default()}}}
  #[test]fn button_entry_and_return_use_equal_durations(){let click=3.;let start=click-TRANSITION-CLICK_SETTLE;let peak=click-CLICK_SETTLE;let release=click+CLICK_HOLD;let end=release+TRANSITION;assert!(((peak-start)-(end-release)).abs()<0.000001);let track=build_context(&input(30),&[Action{time:click,end:click+0.05,x:800.,y:400.}],&[],1920,1080,30,2.,&[]).unwrap();assert!(track.frames[60].zoom>1.03,"entry should be visible a second before the click");assert!(track.frames[87].zoom>1.31);}
  #[test]fn hover_and_cursor_noise_never_move_the_camera(){let actions=[Action{time:1.,end:1.05,x:850.,y:500.}];let a=input(30);let mut b=a.clone();for(i,s)in b.iter_mut().enumerate(){s.x=(i*71%1900)as f64;s.y=(i*43%1000)as f64;s.inside=i%5!=0;}let first=build_context(&a,&actions,&[],1920,1080,30,2.,&[]).unwrap();let next=build_context(&b,&actions,&[],1920,1080,30,2.,&[]).unwrap();for(a,b)in first.frames.iter().zip(next.frames){assert_eq!((a.x,a.y,a.zoom),(b.x,b.y,b.zoom));}assert!(build_context(&a,&[],&[],1920,1080,30,2.,&[]).is_none());}
+ #[test]fn a_click_at_the_very_start_of_the_recording_still_zooms_in(){for fps in [30usize,60]{let track=build_context(&input(fps),&[Action{time:0.05,end:0.1,x:600.,y:400.}],&[],1920,1080,fps as u32,2.,&[]).unwrap();assert!(track.frames[(fps as f64*0.3)as usize].zoom>1.2,"a click in the first frames must not be dropped by the shot filter");}}
  #[test]fn clicks_have_an_earlier_entry_and_gentler_return(){for fps in [30,60]{let track=build_context(&input(fps),&[Action{time:1.,end:1.05,x:600.,y:400.}],&[],1920,1080,fps as u32,2.,&[]).unwrap();assert!(track.frames[(fps as f64*1.05)as usize].zoom>1.3);assert!(track.frames[(fps as f64*1.5)as usize].zoom<track.frames[(fps as f64*1.05)as usize].zoom);assert_eq!(track.frames[(fps as f64*2.5)as usize].zoom,1.);assert!(track.frames.iter().all(|s|s.zoom<=1.321));}}
  #[test]fn typing_is_gentle_stable_and_enter_starts_the_return(){for fps in [30,60]{let mut events=(0..21).map(|i|event(1.+i as f64*0.15,context::TYPE)).collect::<Vec<_>>();events.push(event(4.1,context::ENTER));let track=build_context(&input(fps),&[],&[],1920,1080,fps as u32,2.,&events).unwrap();let a=&track.frames[fps*2];assert!(a.zoom>1.27&&a.zoom<=1.28);for s in &track.frames[fps*2..fps*4]{assert_eq!((a.x,a.y,a.zoom),(s.x,s.y,s.zoom));}assert!(track.frames[(fps as f64*4.4)as usize].zoom<1.27);assert_eq!(track.frames[fps*6].zoom,1.);}}
  #[test]fn multiline_enter_keeps_typing_but_escape_finishes(){let mut events=vec![event(1.,context::TYPE),event(1.5,context::ENTER),event(1.9,context::TYPE),event(2.,context::ESCAPE)];for e in &mut events{e.data.focus.as_mut().unwrap().multiline=true;}let track=build_context(&input(30),&[],&[],1920,1080,30,2.,&events).unwrap();assert!(track.frames[48].zoom>1.27);assert_eq!(track.frames[105].zoom,1.);}
@@ -236,5 +265,24 @@ fn expression(values:&[[f64;4]],keys:&[usize],column:usize,a:usize,b:usize)->Str
  #[test]fn nearby_clicks_share_one_stable_shot(){let r=context::Region{kind:2,x:800,y:480,w:80,h:30,multiline:false};let events=[ContextEvent{time:0.,data:context::Context{target:Some(r),view:1,..Default::default()}}];let actions=(0..4).map(|i|Action{time:1.+i as f64*0.8,end:1.05+i as f64*0.8,x:830.,y:490.}).collect::<Vec<_>>();let track=build_context(&input(30),&actions,&[],1920,1080,30,2.,&events).unwrap();let anchor=&track.frames[30];for s in &track.frames[30..100]{assert_eq!((s.x,s.y,s.zoom),(anchor.x,anchor.y,anchor.zoom));}}
  #[test]fn nearby_clicks_after_a_thoughtful_pause_share_a_shot_but_new_views_do_not(){for fps in [30usize,60]{let r=context::Region{kind:2,x:800,y:480,w:80,h:30,multiline:false};let events=[ContextEvent{time:0.,data:context::Context{target:Some(r.clone()),view:1,..Default::default()}}];let actions=[Action{time:2.,end:2.05,x:830.,y:490.},Action{time:5.,end:5.05,x:850.,y:500.}];let track=build_context(&input(fps),&actions,&[],1920,1080,fps as u32,2.,&events).unwrap();let anchor=track.frames[fps*2];for s in &track.frames[fps*2..=fps*5]{assert_eq!((s.x,s.y,s.zoom),(anchor.x,anchor.y,anchor.zoom));}let mut changed=events.to_vec();changed.push(ContextEvent{time:3.,data:context::Context{target:Some(r),view:2,..Default::default()}});let separated=build_context(&input(fps),&actions,&[],1920,1080,fps as u32,2.,&changed).unwrap();assert_eq!(separated.frames[(3.4*fps as f64)as usize].zoom,1.);}}
  #[test]fn a_deliberate_move_out_of_the_working_area_separates_click_shots(){let mut data=input(30);for p in &mut data[90..120]{p.x=1700.;p.y=900.;}let actions=[Action{time:2.,end:2.05,x:830.,y:490.},Action{time:5.,end:5.05,x:850.,y:500.}];let track=build_context(&data,&actions,&[],1920,1080,30,2.,&[]).unwrap();assert_eq!(track.frames[105].zoom,1.);}
+ #[test]fn manual_zoom_jumps_straight_to_the_configured_strength_on_one_press(){for fps in [30usize,60]{let track=build_manual(&input(fps),&[(1.,1)],1920,1080,fps as u32,2.).unwrap();assert_eq!(track.frames[0].zoom,1.);assert!(track.frames[(fps as f64*1.5)as usize].zoom>1.95,"a single zoom-in press must reach the full configured strength, not an intermediate step");let held=track.frames[(fps as f64*3.)as usize].zoom;assert_eq!(track.frames.last().unwrap().zoom,held,"a manual zoom level must hold until the next key press");}}
+ #[test]fn manual_zoom_out_returns_straight_to_1x_on_one_press(){let mut samples=input(30);for s in &mut samples[90..]{s.x=1500.;s.y=850.;}let track=build_manual(&samples,&[(1.,1),(4.,-1)],1920,1080,30,2.).unwrap();let zoomed=&track.frames[90];assert!(zoomed.zoom>1.95,"a single zoom-in press must reach the full configured strength");assert!(zoomed.x+1920./zoomed.zoom>1500.&&1500.>=zoomed.x,"the camera should be centred on the live cursor position");assert_eq!(track.frames.last().unwrap().zoom,1.,"a single zoom-out press must return fully to 1x");}
+ #[test]fn no_manual_key_presses_means_no_zoom_track(){assert!(build_manual(&input(30),&[],1920,1080,30,2.).is_none());}
  #[test]fn blur_sections_preserve_frames_and_holds_stay_sharp(){let track=build_context(&input(30),&[],&[],1920,1080,30,2.,&[event(1.,context::TYPE),event(1.5,context::TYPE),event(2.,context::TYPE)]).unwrap();let segment=Segment{raw:PathBuf::new(),audio:vec![],commands:PathBuf::new(),duration:12.};let parts=track.split_parts(vec![render::Part{segment:&segment,start:0.,duration:12.,offset:0.,cost:12.}]);assert_eq!(parts.iter().map(|p|(p.duration*30.).round()as usize).sum::<usize>(),360);assert!(track.filter(0.9,0.3).unwrap().contains("split=7"));assert!(!track.filter(1.6,0.2).unwrap().contains("split="));}
+ #[test]#[ignore="requires local FFmpeg"]fn kenney_cursor_does_not_disable_the_smart_zoom_camera(){
+  for kenney in [false,true]{
+  for fps in [30usize,60]{
+   let mut job=super::super::media_tests::fixture(fps as u32,"moderate");
+   job.config.smart_zoom=true;job.config.kenney_cursor=kenney;job.config.cursor="normal".into();
+   job.segments[0].duration=8.;
+   let mut text=String::new();
+   for tick in 0..8*fps{let t=tick as f64/fps as f64;let (x,y)=if t<2.{(60,70)}else{(340,210)};let sample=project::CursorSample{context:None,wheel:0,shape:0,zoom:0,time:t,x,y,inside:true,buttons:if [fps,2*fps,4*fps].contains(&tick){1}else{0},window_offset:None};text+=&format!("{}\n",serde_json::to_string(&sample).unwrap());}
+   fs::write(job.dir.join("cursor-0.jsonl"),text).unwrap();
+   let control=export::Control::default();
+   let track=plan(&job,&control).unwrap();
+   assert!(track.is_some(),"kenney_cursor={kenney} must not disable the smart-zoom camera track, fps={fps}");
+   let track=track.unwrap();
+   assert!(track.frames[fps*2..fps*3].iter().any(|s|s.zoom>1.1),"camera should still zoom in after the click when kenney_cursor={kenney}, fps={fps}");
+  }}
+ }
 }

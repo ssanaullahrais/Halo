@@ -1,6 +1,6 @@
 [package]
 name = "halo"
-version = "0.3.4"
+version = "0.3.5"
 description = "Hold any file to open a radial wheel: compress, convert or resize it in place."
 edition = "2021"
 

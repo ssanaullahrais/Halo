@@ -97,6 +97,36 @@
 .rec-bg-nav:disabled{opacity:0;pointer-events:none}
 .rec-bg-nav{width:26px;height:26px;opacity:0;transition:opacity .18s,background .15s}
 .rec-bg-carousel:hover .rec-bg-nav:not(:disabled),.rec-bg-nav:focus-visible{opacity:1}
+
+.rec-page-head{margin:0 0 14px}
+.rec-page-head h2{margin:0 0 3px}
+.rec-page-sub{margin:0;font-size:11px;color:#6d82a4}
+.rec-card{border:1px solid #e1e8f3;border-radius:13px;background:#ffffffb0;padding:14px 15px;margin:0 0 12px}
+.rec-card-head{display:flex;align-items:center;justify-content:space-between;margin:0 0 12px}
+.rec-card-head h3{margin:0;font-size:12.5px;font-weight:600;color:#1a2a46}
+.rec-card .rec-picker-group,.rec-card>.rec-picker{margin:0}
+.rec-card .rec-field{margin:0}
+.rec-card .rec-toggle{margin:0;min-height:auto}.rec-card>.rec-toggle:not(:first-child){margin-top:12px}
+.rec-card>*+*{margin-top:12px}
+.rec-card:has(>.rec-card-head+[hidden]:last-child) .rec-card-head{margin-bottom:0}
+[data-zoom-options]>*+*{margin-top:12px}
+[data-zoom-options][hidden]{display:none}
+.rec-size-color-row{display:flex;align-items:center;gap:20px;margin-bottom:10px}
+.rec-size-color-row .rec-slider-field{flex:1;margin:0}
+.rec-color-inline{display:flex;align-items:center;gap:9px;flex:none}
+.rec-color-inline>span{font-size:12px;color:#44597e}
+.rec-color-swatch{position:relative;width:58px;height:30px;border:1px solid #d2ddef;border-radius:7px;overflow:hidden;background:#fff}
+.rec-color-swatch input[type=color]{width:100%;height:100%;padding:0;border:0;border-radius:0;cursor:pointer;display:block}
+.rec-behaviour-cols{display:flex;gap:24px}
+.rec-behaviour-col{flex:1;display:flex;flex-direction:column;gap:11px;min-width:0}
+.rec-slider-field{display:flex;align-items:center;gap:12px}
+.rec-slider-field>span:first-child{flex:none;font-size:12px;color:#44597e;min-width:34px}
+.rec-slider-field input[type=range]{flex:1;width:auto}
+.rec-readout{flex:none;min-width:56px;text-align:center;border:1px solid #d2ddef;border-radius:6px;padding:6px 8px;font-size:11px;font-weight:500;color:#33507a;background:#fff;white-space:nowrap}
+.rec-toggle-grid{display:grid;grid-template-columns:1fr 1fr;column-gap:16px;row-gap:10px}
+.rec-toggle-grid .rec-toggle{margin:0;min-height:auto}
+.rec-content section[data-panel=cursor]>.rec-section-label+.rec-toggle{margin:0 0 10px}
+.rec-content section[data-panel=cursor] .rec-tune-row{margin-top:0}
 .rec-bg-nav.prev{left:2px}.rec-bg-nav.next{right:2px}
 
 .rec-bg-carousel .rec-bg-grid{position:relative}

@@ -92,12 +92,12 @@ pub(super) fn glides(samples:&mut[project::CursorSample],width:u32){
 #[cfg(test)]mod tests{
  use super::*;
  #[test]fn detours_become_eased_glides_but_clicks_and_drag_geometry_stay_exact(){
-  let mut samples=(0..121).map(|i|project::CursorSample{context:None,wheel:0,shape:0,time:i as f64/60.,x:100+i*5,y:200+if i<100{(i as f64/100.*std::f64::consts::PI).sin().mul_add(70.,0.).round()as i32}else{i-100},inside:true,buttons:if i>=100{1}else{0},window_offset:None}).collect::<Vec<_>>();let original=samples.clone();glides(&mut samples,1920);
+  let mut samples=(0..121).map(|i|project::CursorSample{context:None,wheel:0,shape:0,zoom:0,time:i as f64/60.,x:100+i*5,y:200+if i<100{(i as f64/100.*std::f64::consts::PI).sin().mul_add(70.,0.).round()as i32}else{i-100},inside:true,buttons:if i>=100{1}else{0},window_offset:None}).collect::<Vec<_>>();let original=samples.clone();glides(&mut samples,1920);
   assert_eq!((samples[100].x,samples[100].y),(original[100].x,original[100].y));for i in 100..121{assert_eq!((samples[i].x,samples[i].y),(original[i].x,original[i].y));}assert!((samples[50].y-200).abs()<2);assert!(samples[5].x<original[5].x);
  }
  #[test]fn mac_cursor_shapes_keep_their_hotspots_without_smoothing(){
   let mut c=Config::default();c.frame="mac".into();c.cursor="normal".into();c.smooth_cursor=false;assert!(enabled(&c));let mut program=project::CursorProgram::new(&c,1920,1080);let mut out=Vec::new();
-  for shape in 0..3{let sample=project::CursorSample{context:None,wheel:0,shape,time:shape as f64,x:120,y:300,inside:true,buttons:0,window_offset:None};program.push(&sample,&mut out).unwrap();}
+  for shape in 0..3{let sample=project::CursorSample{context:None,wheel:0,shape,zoom:0,time:shape as f64,x:120,y:300,inside:true,buttons:0,window_offset:None};program.push(&sample,&mut out).unwrap();}
   let out=String::from_utf8(out).unwrap();for shape in 0..3{let (x,y)=hotspot(&c,shape);assert!(out.contains(&format!("{:.3} overlay@pointer x {};",shape as f64,120-x.round()as i32-PAD as i32)));assert!(out.contains(&format!("{:.3} overlay@pointer y {};",shape as f64,300-y.round()as i32-PAD as i32)));assert!(out.contains(&format!("{:.3} crop@pointerframe y {};",shape as f64,(shape as u32*18+12)*cell(&c))));}
  }
  #[test]fn cinematic_cursor_is_independent_of_smart_zoom_and_modes_are_exclusive(){let mut c=Config::default();c.cursor="normal".into();c.cinematic_cursor=true;c.smart_zoom=false;assert!(processed(&c));assert!(enabled(&c));assert!(!native_cursor(&c));assert!(validate(&c).is_ok());c.smooth_cursor=true;assert!(validate(&c).is_err());}
