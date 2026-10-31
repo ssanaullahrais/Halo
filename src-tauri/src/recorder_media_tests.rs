@@ -109,7 +109,7 @@ fn decoded_video(path:&Path)->Vec<u8>{
 }
 
 #[test]#[ignore="requires local FFmpeg"]fn original_is_packet_copied_without_rendering(){
- let mut job=fixture(30,"moderate");fs::remove_file(&job.segments[0].commands).unwrap();
+ let mut job=fixture(30,"moderate");job.config.click_effect=false;fs::remove_file(&job.segments[0].commands).unwrap();
  // Use the exact live-capture codec rather than the lossless effects fixture.
  let live=job.dir.join("live.mp4");let mut command=ffmpeg();command.arg("-i").arg(&job.segments[0].raw);capture_video_settings(&mut command,&job.config,Encoder::Cpu);command.arg(&live);run(command).unwrap();job.segments[0].raw=live;
  assert!(!export::needs_render(&job));let start=Instant::now();export::save_original(&job,&job.output).unwrap();
@@ -146,7 +146,7 @@ fn decoded_video(path:&Path)->Vec<u8>{
 
 #[test]#[ignore="requires local FFmpeg"]fn arrow_edits_replay_visually_in_export(){
  use crate::recorder_annotations::{Annotation,CurvePoint,record_frame,asset_on_canvas};
- let mut job=fixture(30,"moderate");
+ let mut job=fixture(30,"moderate");job.config.click_effect=false;
  let mut a=Annotation{id:1,kind:"arrow".into(),x:30.,y:80.,w:40.,h:0.,text:String::new(),color:"#FF375F".into(),stroke:3.,font_size:24.,start:0.,end:None,keyframes:vec![],points:vec![]};
  let mut expected=vec![(0.,a.clone())];record_frame(&mut a,0.);
  a.w=260.;record_frame(&mut a,0.2);expected.push((0.2,a.clone()));
@@ -195,7 +195,7 @@ fn decoded_video(path:&Path)->Vec<u8>{
  let mut job=fixture(30,"moderate");job.config.frame=frame.into();job.config.background="preset:ocean".into();job.config.auto_fade=true;fs::remove_file(&job.segments[0].commands).unwrap();
  let tone=job.dir.join("tone.wav");let mut command=ffmpeg();command.args(["-f","lavfi","-i","sine=frequency=440:sample_rate=48000","-t","1.2"]).arg(&tone);run(command).unwrap();job.segments[0].audio.push((tone,true));
  for (id,kind)in [(1,"pencil"),(2,"ellipse")]{job.annotations.push(crate::recorder_annotations::Annotation{id,kind:kind.into(),x:80.,y:60.,w:180.,h:100.,text:String::new(),color:"#ff375f".into(),stroke:6.,font_size:24.,start:0.,end:None,keyframes:vec![],points:if kind=="pencil"{vec![crate::recorder_annotations::CurvePoint{x:110.,y:160.},crate::recorder_annotations::CurvePoint{x:180.,y:80.}]}else{vec![]}});}
- let saved_frame=job.config.frame.clone();job.config.frame="none".into();let saved_annotations=std::mem::take(&mut job.annotations);assert!(!export::needs_render(&job),"short clips must not render just for fades");job.annotations=saved_annotations;job.config.frame=saved_frame;
+ let saved_frame=job.config.frame.clone();job.config.frame="none".into();let saved_annotations=std::mem::take(&mut job.annotations);job.config.click_effect=false;assert!(!export::needs_render(&job),"short clips must not render just for fades");job.config.click_effect=true;job.annotations=saved_annotations;job.config.frame=saved_frame;
  let original=job.dir.join("original.mp4");export::save_original(&job,&original).unwrap();job.original_output=Some(original);
  finish_partitioned(&job,3,3).unwrap();let (w,h)=encoder::output_size(&job.config,384,256);let bytes=w as usize*h as usize*3;let decoded=decoded_video(&job.output);assert_eq!(decoded.len()/bytes,36);
  for tick in [0,35]{let error=decoded[tick*bytes..(tick+1)*bytes].iter().zip(&decoded[18*bytes..19*bytes]).map(|(a,b)|a.abs_diff(*b)as f64).sum::<f64>()/bytes as f64;assert!(error<2.,"short clips must have no fade at frame {tick}");}
@@ -257,7 +257,7 @@ fn decoded_video(path:&Path)->Vec<u8>{
 }
 
 #[test]#[ignore="requires local FFmpeg"]fn normal_audio_only_effects_copy_video_without_rendering(){
- let mut job=fixture(30,"moderate");job.segments[0].commands=job.dir.join("no-visual-commands.txt");job.config.smart_zoom=false;job.config.cursor="hidden".into();job.config.frame="none".into();job.config.auto_fade=false;job.config.interaction_sounds=true;
+ let mut job=fixture(30,"moderate");job.segments[0].commands=job.dir.join("no-visual-commands.txt");job.config.smart_zoom=false;job.config.cursor="hidden".into();job.config.frame="none".into();job.config.auto_fade=false;job.config.interaction_sounds=true;job.config.click_effect=false;
  let events=[project::CursorSample{context:None,wheel:0,shape:0,zoom:0,window_offset:None,time:0.2,x:100,y:100,inside:true,buttons:1},project::CursorSample{context:Some(context::Context{activity:context::TYPE,..Default::default()}),wheel:0,shape:0,zoom:0,window_offset:None,time:0.4,x:100,y:100,inside:true,buttons:0}];fs::write(job.dir.join("cursor-0.jsonl"),events.iter().map(|e|format!("{}\n",serde_json::to_string(e).unwrap())).collect::<String>()).unwrap();let original=job.dir.join("original-audio.mp4");export::save_original(&job,&original).unwrap();job.original_output=Some(original.clone());let original_bytes=fs::read(&original).unwrap();
  for(sounds,music)in [(true,false),(false,true),(true,true)]{job.config.interaction_sounds=sounds;job.config.background_music=music;job.output=job.dir.join(format!("normal-audio-{sounds}-{music}.mp4"));assert!(export::needs_render(&job));assert!(!export::needs_video_render(&job));finish(&job).unwrap();assert!(!job.dir.join("finished-0.mp4").exists(),"audio-only export must bypass visual rendering");assert_eq!(decoded_video(&original),decoded_video(&job.output));assert_eq!(fs::read(&original).unwrap(),original_bytes);let mut command=ffmpeg();command.arg("-i").arg(&job.output).args(["-map","0:a:0","-f","f32le","pipe:1"]);let audio=command.output().unwrap();assert!(audio.status.success());assert!(!audio.stdout.is_empty());}
 }

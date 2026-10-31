@@ -214,7 +214,10 @@ impl Track{
   if states.is_empty()||states.iter().all(|s|s.zoom<1.00001){return None;}
   // Include neighbours so subframe shutter samples remain continuous at worker joins.
   let first=start.saturating_sub(1);let last=(end+1).min(self.frames.len());let origin=start-first;
-  let rects=self.frames[first..last].iter().map(|s|[s.x,s.y,s.x+self.width as f64/s.zoom,s.y+self.height as f64/s.zoom]).collect::<Vec<_>>();let keys=simplify(&rects,0.08);
+  // A tolerance any tighter keeps thousands of keyframes on a long, busy recording: the
+  // per-frame expression (duplicated across the 7 shutter samples below) can reach several
+  // hundred KB, which made ffmpeg's eval=frame parser stall for minutes during export.
+  let rects=self.frames[first..last].iter().map(|s|[s.x,s.y,s.x+self.width as f64/s.zoom,s.y+self.height as f64/s.zoom]).collect::<Vec<_>>();let keys=simplify(&rects,2.0);
   let expressions=(0..4).map(|column|expression(&rects,&keys,column,0,keys.len()-1)).collect::<Vec<_>>();
   let perspective=|shutter:f64|{let e=expressions.iter().map(|s|s.replace("on",&format!("(on+{origin}+{shutter:.3})"))).collect::<Vec<_>>();format!("perspective=x0='{}':y0='{}':x1='{}':y1='{}':x2='{}':y2='{}':x3='{}':y3='{}':sense=source:interpolation=cubic:eval=frame",e[0],e[1],e[2],e[1],e[0],e[3],e[2],e[3])};
   let moving=rects.windows(2).any(|p|(0..4).any(|k|(p[1][k]-p[0][k]).abs()>0.25));
@@ -284,5 +287,17 @@ fn expression(values:&[[f64;4]],keys:&[usize],column:usize,a:usize,b:usize)->Str
    let track=track.unwrap();
    assert!(track.frames[fps*2..fps*3].iter().any(|s|s.zoom>1.1),"camera should still zoom in after the click when kenney_cursor={kenney}, fps={fps}");
   }}
+ }
+ // A long, busy recording (frequent clicks at scattered positions, like real everyday use)
+ // used to produce a per-chunk camera filter several hundred KB long, because the keyframe
+ // simplification tolerance was tight enough to keep thousands of points. ffmpeg's eval=frame
+ // expression parser then stalled for minutes on export, which looked like a hang on Finalizing.
+ #[test]fn busy_long_recording_keeps_the_camera_filter_small(){
+  let fps=60usize;let duration=70;let frames=fps*duration;
+  let inputs=(0..frames).map(|i|{let t=i as f64/fps as f64;Input{x:960.+300.*(t*0.37).sin(),y:540.+200.*(t*0.29).cos(),inside:true,drag:false,offset:[0,0]}}).collect::<Vec<_>>();
+  let actions=(0..duration/3).map(|n|{let time=1.+n as f64*3.;let x=200.+((n*197)%1500)as f64;let y=150.+((n*83)%700)as f64;Action{time,end:time+0.05,x,y}}).collect::<Vec<_>>();
+  let track=build_context(&inputs,&actions,&[],1920,1080,fps as u32,2.,&[]).unwrap();
+  let worst=(0..duration).step_by(15).filter_map(|offset|track.filter(offset as f64,15.)).map(|f|f.len()).max().unwrap_or(0);
+  assert!(worst<400_000,"a busy recording's per-chunk camera filter grew to {worst} bytes; ffmpeg's eval=frame parser stalls on filters this large");
  }
 }

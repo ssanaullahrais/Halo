@@ -74,9 +74,9 @@ fn clone_command(source:&std::process::Command)->std::process::Command{
 // that encounters that limit retires; the remaining workers take its section.
 fn session_limit(error:&str)->bool{
  let e=error.to_ascii_lowercase();
- (e.contains("nvenc")&&(e.contains("session")||e.contains("memory")||e.contains("resource")||e.contains("initializeencoder")))
- ||(e.contains("qsv")&&["memory_alloc","device busy","resource","session limit"].iter().any(|s|e.contains(s)))
- ||(e.contains("amf")&&["out_of_memory","no_free_surfaces","resource","session limit"].iter().any(|s|e.contains(s)))
+ (e.contains("nvenc")&&(e.contains("session")||e.contains("memory")||e.contains("resource")||e.contains("initializeencoder")||e.contains("device unavailable")||e.contains("no capable devices")))
+ ||(e.contains("qsv")&&["memory_alloc","device busy","resource","session limit","device unavailable","initializing an mfx session","initializing mfx session"].iter().any(|s|e.contains(s)))
+ ||(e.contains("amf")&&["out_of_memory","no_free_surfaces","resource","session limit","device unavailable","failed to initialise"].iter().any(|s|e.contains(s)))
 }
 
 pub(super) fn parallel(commands:Vec<(std::process::Command,f64,f64)>,workers:usize,total:f64,control:export::Control)->Res<()>{
@@ -114,6 +114,13 @@ pub(super) fn parallel(commands:Vec<(std::process::Command,f64,f64)>,workers:usi
  #[test]fn hardware_resource_limits_reduce_workers_but_driver_absence_does_not(){
   for error in ["[h264_nvenc] OpenEncodeSessionEx failed: out of memory","[h264_qsv] MFX_ERR_MEMORY_ALLOC","[h264_amf] AMF_OUT_OF_MEMORY","[h264_amf] AMF_NO_FREE_SURFACES"]{assert!(session_limit(error),"{error}");}
   for error in ["[h264_qsv] Error creating a MFX session: unsupported","[h264_amf] DLL amfrt64.dll failed to open","No such filter"]{assert!(!session_limit(error),"{error}");}
+ }
+ // Running several parallel GPU workers can exhaust a driver's concurrent-session limit; the
+ // driver reports that contention in different words depending on the encoder and the moment.
+ // Any of these must retire just that worker, not abandon every other worker's progress and
+ // restart the whole render on a different encoder (which is what made real exports crawl).
+ #[test]fn real_world_device_unavailable_phrasing_is_also_a_session_limit(){
+  for error in ["[h264_nvenc] device unavailable","[h264_qsv] device unavailable","[h264_amf] device unavailable","[h264_qsv] Error initializing an MFX session","[h264_qsv] Error initializing MFX session","[h264_nvenc] No capable devices found."]{assert!(session_limit(error),"{error}");}
  }
  #[test]fn preparation_parallelism_uses_cores_without_exceeding_image_memory_budget(){
   let image=asset_bytes(r#"<svg width="1920" height="1080"><rect width="100%"/></svg>"#);assert_eq!(image,1920*1080*16);

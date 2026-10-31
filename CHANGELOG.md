@@ -2,6 +2,9 @@
 
 ## 0.3.5 — 2026-10-31
 
+- Fixed exports getting stuck on Finalizing: a busy Smart Zoom recording could produce a per-chunk camera filter hundreds of KB long, which made ffmpeg's frame-by-frame expression parser stall for minutes.
+- Fixed exports repeatedly cycling through every hardware encoder (NVENC, QSV, AMF) before falling back to slow CPU encoding, even on capable GPUs: a transient GPU session-limit error was being misread as a fatal failure instead of a signal to just retry with fewer workers.
+- Fixed exports hanging on the final audio mix step on some recordings: switched to Windows' built-in AAC encoder, which is also faster than ffmpeg's own.
 - Reworked the Cursor settings tab: fixed missing labels and spacing bugs, split Cursor Motion and Click Effect into their own cards, and moved keystroke options into Behaviour.
 - Smart Zoom now sets sensible defaults on enable (1.75x strength, manual control and live preview off) instead of leaving them as they were.
 - Click Effect is on by default at Strong intensity.

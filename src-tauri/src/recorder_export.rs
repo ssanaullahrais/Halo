@@ -227,6 +227,9 @@ fn write_segments(paths:&[PathBuf],list:&Path,trim:Option<&[f64]>)->Res<()> {
 }
 
 pub(super) fn concat_delivery(paths:&[PathBuf],destination:&Path,list:&Path,duration:f64,from:f64,to:f64,audio:Option<&Path>,trim:Option<&[f64]>)->Res<()> {concat_delivery_controlled(paths,destination,list,duration,from,to,audio,trim,false,&Control::default())}
+// aac_mf (Windows MediaFoundation) rather than ffmpeg's own native aac encoder: the
+// bundled ffmpeg build's native AAC encoder hangs partway through on some real
+// recordings instead of finishing, which showed up as exports stuck on Finalizing.
 pub(super) fn concat_delivery_controlled(paths:&[PathBuf],destination:&Path,list:&Path,duration:f64,from:f64,to:f64,audio:Option<&Path>,trim:Option<&[f64]>,fade:bool,control:&Control)->Res<()> {
  if paths.is_empty(){return Err("No recording segments were captured.".into());}
  write_segments(paths,list,trim)?;
@@ -234,7 +237,7 @@ pub(super) fn concat_delivery_controlled(paths:&[PathBuf],destination:&Path,list
   let mut command=ffmpeg();command.args(["-f","concat","-safe","0","-i"]).arg(list);
   if let Some(audio)=audio{command.arg("-i").arg(audio);}
   command.args(["-map","0:v:0","-map",if audio.is_some(){"1:a?"}else{"0:a?"},"-c:v","copy"]);
-  if fade_enabled(fade,duration){let d=1f64;command.args(["-af",&format!("afade=t=in:st=0:d={d},afade=t=out:st={}:d={d}",(duration-d).max(d)),"-c:a","aac","-b:a","192k"]);}else{command.args(["-c:a","copy"]);}
+  if fade_enabled(fade,duration){let d=1f64;command.args(["-af",&format!("afade=t=in:st=0:d={d},afade=t=out:st={}:d={d}",(duration-d).max(d)),"-c:a","aac_mf","-b:a","192k"]);}else{command.args(["-c:a","copy"]);}
   command.args(["-t",&duration.to_string(),"-movflags","+faststart"]).arg(temporary);
   {command.args(["-progress","pipe:1","-stats_period","0.1"]);run_supervised_inner(command,Some((duration,from,to)),Watchdog::for_export(Some(duration),None),None,None,control.clone())}
  })
@@ -242,7 +245,7 @@ pub(super) fn concat_delivery_controlled(paths:&[PathBuf],destination:&Path,list
 
 // One final audio encode mixes optional effects while copying rendered video.
 pub(super) fn concat_with_soundtrack(paths:&[PathBuf],destination:&Path,list:&Path,duration:f64,source:Option<&Path>,has_audio:bool,fx:&Path,fade:bool,durations:Option<&[f64]>,control:&Control)->Res<()>{
- write_segments(paths,list,durations)?;atomic_mp4_controlled(destination,control,|temporary|{let mut cmd=ffmpeg();cmd.args(["-f","concat","-safe","0","-i"]).arg(list);let with_voice=has_audio&&source.is_some();if with_voice{cmd.arg("-i").arg(source.unwrap());}cmd.arg("-i").arg(fx);let mut filter=if with_voice{"[1:a]aresample=48000,asplit=2[voice][speech];[2:a]aresample=48000,lowpass=f=6500[fx];[fx][speech]sidechaincompress=threshold=0.025:ratio=5:attack=25:release=320:knee=4:makeup=1[ducked];[voice][ducked]amix=inputs=2:normalize=0,alimiter=limit=0.95:level=false:latency=true".to_string()}else{"[1:a]aresample=48000,lowpass=f=6500".to_string()};if fade_enabled(fade,duration){filter+=&format!(",afade=t=in:st=0:d=1,afade=t=out:st={}:d=1",(duration-1.).max(1.));}filter+="[audio]";cmd.args(["-filter_complex",&filter,"-map","0:v:0","-map","[audio]","-c:v","copy","-c:a","aac","-b:a","192k","-t",&duration.to_string(),"-movflags","+faststart"]).arg(temporary);cmd.args(["-progress","pipe:1","-stats_period","0.1"]);run_supervised_inner(cmd,Some((duration,0.,100.)),Watchdog::for_export(Some(duration),None),None,None,control.clone())})
+ write_segments(paths,list,durations)?;atomic_mp4_controlled(destination,control,|temporary|{let mut cmd=ffmpeg();cmd.args(["-f","concat","-safe","0","-i"]).arg(list);let with_voice=has_audio&&source.is_some();if with_voice{cmd.arg("-i").arg(source.unwrap());}cmd.arg("-i").arg(fx);let mut filter=if with_voice{"[1:a]aresample=48000,asplit=2[voice][speech];[2:a]aresample=48000,lowpass=f=6500[fx];[fx][speech]sidechaincompress=threshold=0.025:ratio=5:attack=25:release=320:knee=4:makeup=1[ducked];[voice][ducked]amix=inputs=2:normalize=0,alimiter=limit=0.95:level=false:latency=true".to_string()}else{"[1:a]aresample=48000,lowpass=f=6500".to_string()};if fade_enabled(fade,duration){filter+=&format!(",afade=t=in:st=0:d=1,afade=t=out:st={}:d=1",(duration-1.).max(1.));}filter+="[audio]";cmd.args(["-filter_complex",&filter,"-map","0:v:0","-map","[audio]","-c:v","copy","-c:a","aac_mf","-b:a","192k","-t",&duration.to_string(),"-movflags","+faststart"]).arg(temporary);cmd.args(["-progress","pipe:1","-stats_period","0.1"]);run_supervised_inner(cmd,Some((duration,0.,100.)),Watchdog::for_export(Some(duration),None),None,None,control.clone())})
 }
 
 pub(super) fn save_original(job:&Session,destination:&Path)->Res<()> {
@@ -270,7 +273,7 @@ pub(super) fn save_original(job:&Session,destination:&Path)->Res<()> {
  }
  // One continuous audio encode prevents AAC priming gaps at pause/resume joins.
  filters.push(format!("{}concat=n={}:v=0:a=1[audio]",segments.join(""),segments.len()));
- cmd.args(["-filter_complex_threads","1","-filter_complex",&filters.join(";"),"-map","0:v:0","-c:v","copy","-map","[audio]","-c:a","aac","-b:a","192k","-ar","48000","-t",&duration.to_string(),"-movflags","+faststart"]);
+ cmd.args(["-filter_complex_threads","1","-filter_complex",&filters.join(";"),"-map","0:v:0","-c:v","copy","-map","[audio]","-c:a","aac_mf","-b:a","192k","-ar","48000","-t",&duration.to_string(),"-movflags","+faststart"]);
  atomic_mp4(destination,|temporary|{cmd.arg(temporary);run_progress(cmd,duration,0.,100.)})
 }
 
